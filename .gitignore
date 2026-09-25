@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+
+# Production builds and generated output
+dist/
+build/
+out/
+coverage/
+.vite/
+.vercel/
+
+# TypeScript and tool caches
+*.tsbuildinfo
+.eslintcache
+.turbo/
+
+# Logs and runtime files
+*.log
+logs/
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Local databases and uploaded data
+*.sqlite
+*.sqlite3
+*.db
+uploads/
+
+# Local certificates and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor and local workspace files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
