@@ -30,6 +30,7 @@ pids/
 *.pid.lock
 
 # Local databases and uploaded data
+/data/
 *.sqlite
 *.sqlite3
 *.db
@@ -60,3 +61,4 @@ tmp/
 temp/
 *.tmp
 *.temp
+

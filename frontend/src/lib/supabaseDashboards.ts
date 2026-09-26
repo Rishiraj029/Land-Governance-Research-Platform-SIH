@@ -17,6 +17,8 @@ import type {
 /** Only the columns that actually exist in public.dashboard_indicators. */
 const DASHBOARD_COLUMNS =
   'id, indicator_name, category, state, district, year, value, unit, source, description, created_at';
+const DASHBOARD_PAGE_SIZE = 1000;
+let dashboardIndicatorsInFlight: Promise<DashboardLoadResult> | null = null;
 
 /** Raw row shape as returned by PostgREST. */
 interface DashboardIndicatorRow {
@@ -94,21 +96,41 @@ function describeDashboardError(code: string | undefined, message: string): stri
  * Load every dashboard indicator row.
  * Ordered by category → state → year so the table and charts start grouped.
  */
-export async function loadDashboardIndicators(): Promise<DashboardLoadResult> {
-  try {
-    const { data, error } = await supabase
-      .from('dashboard_indicators')
-      .select(DASHBOARD_COLUMNS)
-      .order('category', { ascending: true })
-      .order('state', { ascending: true })
-      .order('year', { ascending: true });
+export function loadDashboardIndicators(): Promise<DashboardLoadResult> {
+  if (dashboardIndicatorsInFlight) return dashboardIndicatorsInFlight;
 
-    if (error) {
-      console.error('Error loading dashboard indicators:', error);
-      return { indicators: [], error: describeDashboardError(error.code, error.message) };
+  const request = fetchDashboardIndicators();
+  const sharedRequest = request.finally(() => {
+    if (dashboardIndicatorsInFlight === sharedRequest) dashboardIndicatorsInFlight = null;
+  });
+  dashboardIndicatorsInFlight = sharedRequest;
+  return sharedRequest;
+}
+
+async function fetchDashboardIndicators(): Promise<DashboardLoadResult> {
+  try {
+    const rows: DashboardIndicatorRow[] = [];
+
+    for (let offset = 0; ; offset += DASHBOARD_PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from('dashboard_indicators')
+        .select(DASHBOARD_COLUMNS)
+        .order('category', { ascending: true })
+        .order('state', { ascending: true })
+        .order('year', { ascending: true })
+        .order('id', { ascending: true })
+        .range(offset, offset + DASHBOARD_PAGE_SIZE - 1);
+
+      if (error) {
+        console.error('Error loading dashboard indicators:', error);
+        return { indicators: [], error: describeDashboardError(error.code, error.message) };
+      }
+
+      const page = (data || []) as DashboardIndicatorRow[];
+      rows.push(...page);
+      if (page.length < DASHBOARD_PAGE_SIZE) break;
     }
 
-    const rows = (data || []) as DashboardIndicatorRow[];
     return { indicators: rows.map(rowToIndicator), error: null };
   } catch (error) {
     console.error('Unexpected error loading dashboard indicators:', error);
