@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "react-router-dom";
-import { useState, type FormEvent } from "react";
+import { useState, type CSSProperties, type FormEvent } from "react";
 import { Search, Map, GitBranch, Users, BarChart3, Lightbulb, FileText, ArrowRight, Calendar, Building2 } from "lucide-react";
+import "./Landing.css";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
 
@@ -278,27 +279,85 @@ export default function Landing() {
         </section>
 
         {/* Live Dashboard Preview */}
-        <section className="py-16 bg-[#F5F7FA]">
+        <section className="dashboard-preview-section relative overflow-hidden py-16 sm:py-20">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="text-center mb-8">
-              <h2 className="text-3xl font-bold text-[#1F2933] mb-4">Live Dashboard Preview</h2>
-              <p className="text-lg text-[#5A6472] max-w-2xl mx-auto">
+            <div className="relative z-10 mb-10 text-center">
+              <p className="mb-3 text-xs font-bold uppercase tracking-[0.18em] text-[#0B6B57]">National indicators · visual preview</p>
+              <h2 className="mb-4 text-3xl font-bold text-[#1F2933] sm:text-4xl">Live Dashboard Preview</h2>
+              <p className="mx-auto max-w-2xl text-base text-[#5A6472] sm:text-lg">
                 Real-time insights into land-use trends, policy performance, and governance metrics
               </p>
             </div>
             
-            <div className="relative bg-white rounded-lg border border-[#E1E5EA] overflow-hidden shadow-lg">
-              <div className="aspect-video bg-gradient-to-br from-[#0B3D91]/5 to-[#FF9933]/5 flex items-center justify-center">
-                <div className="text-center">
-                  <Map className="h-16 w-16 text-[#0B3D91]/30 mx-auto mb-4" />
-                  <p className="text-[#5A6472]">National Land-Use Trend Dashboard</p>
-                  <p className="text-sm text-[#5A6472]/70">Interactive map visualization</p>
+            <div className="dashboard-preview-frame relative overflow-hidden rounded-xl border border-[#D7E1DB] bg-white shadow-[0_28px_80px_-40px_rgba(17,47,54,0.45)]">
+              <div className="flex items-center justify-between gap-3 border-b border-[#E5EBE7] bg-white px-4 py-3 sm:px-6">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex gap-1.5" aria-hidden="true"><span className="h-2.5 w-2.5 rounded-full bg-[#E88665]" /><span className="h-2.5 w-2.5 rounded-full bg-[#E7B64D]" /><span className="h-2.5 w-2.5 rounded-full bg-[#6AB08B]" /></div>
+                  <span className="truncate text-xs font-semibold text-[#42534E] sm:text-sm">Land Governance / Overview</span>
                 </div>
+                <span className="shrink-0 rounded-full border border-[#D8EAE1] bg-[#F0F8F3] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#24734C] sm:text-xs">Preview</span>
               </div>
-              <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity">
+
+              <div className="dashboard-preview-content grid gap-4 bg-[#F4F7F3] p-4 sm:gap-5 sm:p-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(220px,0.8fr)] lg:p-8">
+                <div className="min-w-0 space-y-4 sm:space-y-5">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div><p className="mb-1 text-xs font-medium text-[#718079]">Platform snapshot</p><h3 className="text-lg font-bold text-[#1F332D] sm:text-xl">Land governance at a glance</h3></div>
+                    <div className="flex items-center gap-1.5 text-xs text-[#61726A]"><span className="h-2 w-2 rounded-full bg-[#2E9B68]" />India overview</div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+                    {[
+                      { value: "28", label: "States covered", tone: "#138808", wash: "#EAF4E8" },
+                      { value: "40+", label: "Policy dashboards", tone: "#0B3D91", wash: "#E9EFF8" },
+                      { value: "12.4k", label: "Research documents", tone: "#C66B2D", wash: "#FBF0E5" },
+                    ].map((metric, index) => (
+                      <div key={metric.label} className="dashboard-preview-metric rounded-lg border border-[#E2E9E3] bg-white p-3 sm:p-4" style={{ "--metric-delay": `${index * 100}ms`, "--metric-tone": metric.tone, "--metric-wash": metric.wash } as CSSProperties}>
+                        <p className="text-lg font-bold sm:text-2xl" style={{ color: metric.tone }}>{metric.value}</p>
+                        <p className="mt-1 text-[10px] leading-tight text-[#718079] sm:text-xs">{metric.label}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-[1.15fr_0.85fr]">
+                    <div className="rounded-lg border border-[#E2E9E3] bg-white p-3.5 sm:p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2"><div><p className="text-sm font-semibold text-[#30443C]">Regional overview</p><p className="text-[10px] text-[#89968F]">Illustrative coverage view</p></div><Map className="h-4 w-4 text-[#0B6B57]" aria-hidden="true" /></div>
+                      <div className="dashboard-preview-map relative flex h-28 items-center justify-center overflow-hidden rounded-md sm:h-36">
+                        <div className="dashboard-preview-map-grid absolute inset-0" />
+                        <div className="dashboard-preview-map-dots relative grid grid-cols-7 gap-1.5 sm:gap-2" aria-hidden="true">
+                          {Array.from({ length: 35 }, (_, index) => <span key={index} style={{ "--dot-delay": `${(index % 7) * 55 + Math.floor(index / 7) * 35}ms` } as CSSProperties} />)}
+                        </div>
+                        <span className="absolute bottom-2 left-2 rounded bg-white/90 px-2 py-1 text-[9px] font-medium text-[#607169]">Spatial indicators</span>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-[#E2E9E3] bg-white p-3.5 sm:p-4">
+                      <div className="mb-3"><p className="text-sm font-semibold text-[#30443C]">Indicator movement</p><p className="text-[10px] text-[#89968F]">Illustrative trend view</p></div>
+                      <div className="dashboard-preview-chart relative flex h-28 items-end justify-between gap-1 overflow-hidden border-b border-l border-[#E7ECE8] px-2 pt-2 sm:h-36 sm:gap-2" aria-hidden="true">
+                        <span className="absolute inset-x-0 top-1/4 border-t border-dashed border-[#E7ECE8]" /><span className="absolute inset-x-0 top-2/4 border-t border-dashed border-[#E7ECE8]" />
+                        {[38, 57, 46, 72, 62, 86, 75, 96].map((height, index) => <span key={index} className="dashboard-preview-bar" style={{ "--bar-height": `${height}%`, "--bar-delay": `${index * 90}ms` } as CSSProperties} />)}
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-[9px] text-[#89968F]"><span>Earlier</span><span>Recent</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                <aside className="dashboard-preview-aside flex flex-col justify-between gap-4 rounded-lg bg-[#173D35] p-4 text-white sm:p-5">
+                  <div><div className="mb-5 flex items-center justify-between"><span className="text-xs font-semibold text-white/75">Explore the data</span><BarChart3 className="h-4 w-4 text-[#F3B45C]" aria-hidden="true" /></div><p className="text-2xl font-bold">Evidence, made visible.</p><p className="mt-2 text-xs leading-relaxed text-white/70">Compare indicators, explore regional patterns, and follow policy performance in one place.</p></div>
+                  <div className="space-y-3" aria-hidden="true">
+                    {[
+                      { label: "Land records", width: "78%", color: "#F3B45C" },
+                      { label: "Programme reach", width: "61%", color: "#73C4A0" },
+                      { label: "Regional data", width: "88%", color: "#8DB6E8" },
+                    ].map((item) => <div key={item.label}><div className="mb-1 flex justify-between text-[10px] text-white/70"><span>{item.label}</span><span>Explore</span></div><div className="h-1.5 overflow-hidden rounded-full bg-white/15"><span className="dashboard-preview-progress block h-full rounded-full" style={{ "--progress-width": item.width, backgroundColor: item.color } as CSSProperties} /></div></div>)}
+                  </div>
+                  <p className="border-t border-white/15 pt-3 text-[10px] leading-relaxed text-white/55">Charts are illustrative. Open the dashboard for sourced indicators.</p>
+                </aside>
+              </div>
+
+              <div className="absolute inset-0 flex items-center justify-center bg-[#102622]/35 opacity-0 transition-opacity hover:opacity-100 focus-within:opacity-100">
                 <Link
                   to="/dashboards"
-                  className="bg-white text-[#0B3D91] px-6 py-3 rounded-lg font-semibold hover:bg-[#F5F7FA] transition-colors"
+                  className="rounded-lg bg-white px-6 py-3 font-semibold text-[#0B3D91] shadow-lg transition-colors hover:bg-[#F5F7FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF9933]"
                 >
                   View Full Interactive Dashboard →
                 </Link>
@@ -328,7 +387,7 @@ export default function Landing() {
                 <div className="flex items-center gap-6 text-white/80">
                   <div className="flex items-center gap-2">
                     <Calendar className="h-5 w-5" />
-                    <span>Deadline: December 31, 2025</span>
+                    <span>Deadline: December 31, 2026</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Building2 className="h-5 w-5" />
