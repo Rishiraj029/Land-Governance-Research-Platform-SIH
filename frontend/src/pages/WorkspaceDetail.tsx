@@ -26,9 +26,11 @@ import {
   loadWorkspaceTasks,
   loadWorkspaceActivity,
   addWorkspaceMember,
-  findUserByEmail,
+  findUserByProfileName,
   addWorkspaceDocument,
+  removeWorkspaceDocument,
   createResearchNote,
+  updateResearchNote,
   deleteResearchNote,
   createWorkspaceTask,
   updateWorkspaceTask,
@@ -61,6 +63,8 @@ export default function WorkspaceDetail() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview");
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
+  // Note currently being edited through the same modal used for creating notes.
+  const [editingNote, setEditingNote] = useState<ResearchNote | null>(null);
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
   const [showAddDocumentModal, setShowAddDocumentModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
@@ -243,12 +247,13 @@ export default function WorkspaceDetail() {
   };
 
   // Handle invite member
-  const handleInviteMember = async (data: { name: string; email: string; role: string; permission: string }) => {
+  const handleInviteMember = async (data: { name: string; role: string; permission: string }) => {
     if (!id || !user) return;
 
     try {
-      // Find user by email
-      const userResult = await findUserByEmail(data.email);
+      // Members are matched on their registered profile name: public.profiles has no email
+      // column, so the previous email lookup could never resolve a user id.
+      const userResult = await findUserByProfileName(data.name);
       if (userResult.error || !userResult.userId) {
         setToastMessage(`Failed to find user: ${userResult.error || "User not found"}`);
         setShowToast(true);
@@ -347,6 +352,37 @@ export default function WorkspaceDetail() {
     } catch (error) {
       console.error("Error deleting note:", error);
       setToastMessage("Failed to delete note");
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+    }
+  };
+
+  // Handle edit note
+  const handleEditNote = async (noteId: string, data: { title: string; content: string }) => {
+    if (!id) return;
+
+    try {
+      const result = await updateResearchNote(noteId, data.title, data.content);
+      if (result.error) {
+        setToastMessage(`Failed to update note: ${result.error}`);
+        setShowToast(true);
+        setTimeout(() => setShowToast(false), 3000);
+        return;
+      }
+
+      // Reload notes
+      const notesResult = await loadResearchNotes(id);
+      if (!notesResult.error) {
+        setNotes(notesResult.notes);
+      }
+
+      setEditingNote(null);
+      setToastMessage("Note updated successfully");
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+    } catch (error) {
+      console.error("Error updating note:", error);
+      setToastMessage("Failed to update note");
       setShowToast(true);
       setTimeout(() => setShowToast(false), 3000);
     }
@@ -497,11 +533,35 @@ export default function WorkspaceDetail() {
   };
 
   // Handle remove document
-  const handleRemoveDocument = async (_documentId: string) => {
+  const handleRemoveDocument = async (workspaceDocumentId: string) => {
+    if (!id) return;
+
     try {
-      // Note: remove document function not implemented in service layer yet
-      // For now, we'll just show a message
-      setToastMessage("Document removal not implemented yet");
+      // RLS only lets the workspace owner delete workspace_documents rows; the service reports
+      // that case instead of a false success.
+      const result = await removeWorkspaceDocument(id, workspaceDocumentId);
+      if (result.error) {
+        setToastMessage(`Failed to remove document: ${result.error}`);
+        setShowToast(true);
+        setTimeout(() => setShowToast(false), 3000);
+        return;
+      }
+
+      // Reload documents and count
+      const [documentsResult, documentCountResult] = await Promise.all([
+        loadWorkspaceDocuments(id),
+        getWorkspaceDocumentCount(id)
+      ]);
+
+      if (!documentsResult.error) {
+        setDocuments(documentsResult.documents);
+      }
+
+      if (!documentCountResult.error && workspace) {
+        setWorkspace({ ...workspace, documentCount: documentCountResult.count });
+      }
+
+      setToastMessage("Document removed from workspace");
       setShowToast(true);
       setTimeout(() => setShowToast(false), 3000);
     } catch (error) {
@@ -917,13 +977,22 @@ export default function WorkspaceDetail() {
                     <div key={note.id} className="bg-white border border-[#E1E5EA] rounded-lg p-6">
                       <div className="flex items-start justify-between mb-3">
                         <h3 className="text-lg font-semibold text-[#1F2933] line-clamp-2">{note.title}</h3>
-                        <button
-                          onClick={() => handleDeleteNote(note.id)}
-                          className="p-1 hover:bg-red-50 rounded text-red-600"
-                          aria-label="Delete note"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setEditingNote(note)}
+                            className="p-1 hover:bg-[#F5F7FA] rounded text-[#0B3D91]"
+                            aria-label="Edit note"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteNote(note.id)}
+                            className="p-1 hover:bg-red-50 rounded text-red-600"
+                            aria-label="Delete note"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
                       <p className="text-sm text-[#5A6472] line-clamp-3 mb-4">{note.content}</p>
                       <div className="flex items-center justify-between text-xs text-[#5A6472]">
@@ -1152,10 +1221,19 @@ export default function WorkspaceDetail() {
         />
       )}
 
-      {showAddNoteModal && (
+      {(showAddNoteModal || editingNote) && (
         <AddNoteModal
-          onClose={() => setShowAddNoteModal(false)}
-          onSubmit={handleAddNote}
+          key={editingNote?.id ?? "new-note"}
+          mode={editingNote ? "edit" : "create"}
+          initialTitle={editingNote?.title}
+          initialContent={editingNote?.content}
+          onClose={() => {
+            setShowAddNoteModal(false);
+            setEditingNote(null);
+          }}
+          onSubmit={(data) =>
+            editingNote ? handleEditNote(editingNote.id, data) : handleAddNote(data)
+          }
         />
       )}
 

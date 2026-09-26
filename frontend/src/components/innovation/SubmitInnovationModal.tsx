@@ -1,222 +1,55 @@
-import { useState } from "react";
-import { X } from "lucide-react";
-import { INNOVATION_CATEGORIES, INNOVATION_STATES } from "../../lib/mockInnovationData";
-import type { CreateInnovationFormData } from "../../types/innovation";
+import { useEffect, useState, type FormEvent } from 'react';
+import { X } from 'lucide-react';
+import type { CreateInnovationInput } from '../../types/innovation';
 
 interface SubmitInnovationModalProps {
   onClose: () => void;
-  onSubmit: (data: CreateInnovationFormData) => void;
+  onSubmit: (data: CreateInnovationInput) => Promise<void>;
+  submitting: boolean;
+  error: string | null;
 }
 
-export default function SubmitInnovationModal({ onClose, onSubmit }: SubmitInnovationModalProps) {
-  const [formData, setFormData] = useState<CreateInnovationFormData>({
-    title: "",
-    description: "",
-    category: "Digital Governance",
-    problem: "",
-    solution: "",
-    location: "Other",
-    organization: "",
-    team: "",
-    contact: ""
-  });
+const EMPTY_FORM: CreateInnovationInput = { title: '', description: '', category: '', state: '', district: '', organization: '' };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSubmit(formData);
+export default function SubmitInnovationModal({ onClose, onSubmit, submitting, error }: SubmitInnovationModalProps) {
+  const [formData, setFormData] = useState<CreateInnovationInput>(EMPTY_FORM);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !submitting) onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose, submitting]);
+
+  const update = (field: keyof CreateInnovationInput, value: string) => setFormData((current) => ({ ...current, [field]: value }));
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const missing = Object.entries(formData).find(([, value]) => !value.trim());
+    if (missing) { setValidationError('Complete all fields before submitting your innovation.'); return; }
+    setValidationError(null);
+    await onSubmit(Object.fromEntries(Object.entries(formData).map(([key, value]) => [key, value.trim()])) as CreateInnovationInput);
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between p-6 border-b border-[#E1E5EA]">
-          <div>
-            <h2 className="text-xl font-semibold text-[#1F2933]">Submit Innovation</h2>
-            <p className="text-sm text-[#5A6472] mt-1">Share your land governance innovation</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-[#F5F7FA] rounded-full text-[#5A6472]"
-            aria-label="Close modal"
-          >
-            <X className="h-5 w-5" />
-          </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1F2933]/50 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onClose(); }}>
+      <section className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-xl" role="dialog" aria-modal="true" aria-labelledby="submit-innovation-title">
+        <div className="flex items-start justify-between border-b border-[#E1E5EA] p-5">
+          <div><h2 id="submit-innovation-title" className="text-xl font-semibold text-[#1F2933]">Submit an innovation</h2><p className="mt-1 text-sm text-[#5A6472]">Your submission will be recorded as Submitted for review.</p></div>
+          <button type="button" onClick={onClose} disabled={submitting} className="rounded p-1 text-[#5A6472] hover:bg-[#F5F7FA] focus:outline-none focus:ring-2 focus:ring-[#FF9933]" aria-label="Close submission form"><X className="h-5 w-5" /></button>
         </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          {/* Innovation Title */}
-          <div>
-            <label htmlFor="title" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Innovation Title <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              id="title"
-              required
-              value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="Enter a descriptive title for your innovation"
-            />
-          </div>
-
-          {/* Description */}
-          <div>
-            <label htmlFor="description" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Description <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              id="description"
-              required
-              rows={4}
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="Describe your innovation in detail..."
-            />
-          </div>
-
-          {/* Category */}
-          <div>
-            <label htmlFor="category" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Category <span className="text-red-500">*</span>
-            </label>
-            <select
-              id="category"
-              required
-              value={formData.category}
-              onChange={(e) => setFormData({ ...formData, category: e.target.value as any })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-            >
-              {INNOVATION_CATEGORIES.map(category => (
-                <option key={category} value={category}>{category}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Problem Addressed */}
-          <div>
-            <label htmlFor="problem" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Problem Addressed <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              id="problem"
-              required
-              rows={3}
-              value={formData.problem}
-              onChange={(e) => setFormData({ ...formData, problem: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="What specific land governance problem does your innovation address?"
-            />
-          </div>
-
-          {/* Proposed Solution */}
-          <div>
-            <label htmlFor="solution" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Proposed Solution <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              id="solution"
-              required
-              rows={3}
-              value={formData.solution}
-              onChange={(e) => setFormData({ ...formData, solution: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="How does your innovation solve this problem?"
-            />
-          </div>
-
-          {/* Location */}
-          <div>
-            <label htmlFor="location" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Location/State <span className="text-red-500">*</span>
-            </label>
-            <select
-              id="location"
-              required
-              value={formData.location}
-              onChange={(e) => setFormData({ ...formData, location: e.target.value as any })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-            >
-              {INNOVATION_STATES.map(state => (
-                <option key={state} value={state}>{state}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Organization */}
-          <div>
-            <label htmlFor="organization" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Organization/Institution <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              id="organization"
-              required
-              value={formData.organization}
-              onChange={(e) => setFormData({ ...formData, organization: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="Your organization or institution"
-            />
-          </div>
-
-          {/* Team */}
-          <div>
-            <label htmlFor="team" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Team Members <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              id="team"
-              required
-              value={formData.team}
-              onChange={(e) => setFormData({ ...formData, team: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="Team member names (comma-separated)"
-            />
-          </div>
-
-          {/* Contact */}
-          <div>
-            <label htmlFor="contact" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Contact Information <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="email"
-              id="contact"
-              required
-              value={formData.contact}
-              onChange={(e) => setFormData({ ...formData, contact: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="Email address for communication"
-            />
-          </div>
-
-          {/* Prototype Notice */}
-          <div className="bg-[#FF9933]/10 border border-[#FF9933]/20 rounded-lg p-4">
-            <p className="text-sm text-[#FF9933]">
-              <strong>Prototype Notice:</strong> This is a frontend prototype submission. No data will be sent to a backend server. Your submission will be stored locally for demonstration purposes only.
-            </p>
-          </div>
-
-          {/* Form Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#E1E5EA]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-[#5A6472] hover:bg-[#F5F7FA] rounded-md transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-sm font-medium text-white bg-[#0B3D91] hover:bg-[#062A63] rounded-md transition-colors"
-            >
-              Submit Innovation
-            </button>
-          </div>
+        <form className="space-y-4 p-5" onSubmit={handleSubmit} noValidate>
+          {(validationError || error) && <p className="rounded-md border border-[#D64545]/30 bg-red-50 p-3 text-sm text-[#D64545]" role="alert">{validationError || error}</p>}
+          <Field label="Innovation title" value={formData.title} onChange={(value) => update('title', value)} autoFocus />
+          <label className="block text-sm font-medium text-[#1F2933]">Description<textarea value={formData.description} onChange={(event) => update('description', event.target.value)} required rows={5} className="mt-1 w-full rounded-md border border-[#E1E5EA] p-3 text-sm focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#FF9933]" /></label>
+          <div className="grid gap-4 sm:grid-cols-2"><Field label="Category" value={formData.category} onChange={(value) => update('category', value)} /><Field label="Organization" value={formData.organization} onChange={(value) => update('organization', value)} /></div>
+          <div className="grid gap-4 sm:grid-cols-2"><Field label="State" value={formData.state} onChange={(value) => update('state', value)} /><Field label="District" value={formData.district} onChange={(value) => update('district', value)} /></div>
+          <div className="flex flex-col-reverse gap-3 border-t border-[#E1E5EA] pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={onClose} disabled={submitting} className="rounded-md px-4 py-2 text-sm font-medium text-[#5A6472] hover:bg-[#F5F7FA] focus:outline-none focus:ring-2 focus:ring-[#FF9933]">Cancel</button><button type="submit" disabled={submitting} className="rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63] disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-[#FF9933]">{submitting ? 'Submitting…' : 'Submit innovation'}</button></div>
         </form>
-      </div>
+      </section>
     </div>
   );
+}
+
+function Field({ label, value, onChange, autoFocus = false }: { label: string; value: string; onChange: (value: string) => void; autoFocus?: boolean }) {
+  return <label className="block text-sm font-medium text-[#1F2933]">{label}<input type="text" value={value} onChange={(event) => onChange(event.target.value)} required autoFocus={autoFocus} className="mt-1 w-full rounded-md border border-[#E1E5EA] p-3 text-sm focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#FF9933]" /></label>;
 }

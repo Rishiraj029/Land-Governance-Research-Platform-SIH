@@ -4,17 +4,21 @@
  */
 import { Link } from "react-router-dom";
 import { Globe, Database, BookOpen, Map as MapIcon, Building2 } from "lucide-react";
-import type { DashboardRecord } from "../../types/dashboard";
+import type { DashboardIndicator } from "../../types/dashboard";
 
 interface Props {
-  records: DashboardRecord[];
+  records: DashboardIndicator[];
+}
+
+function distinct(values: (string | null)[]): number {
+  return new Set(values.filter((value): value is string => Boolean(value))).size;
 }
 
 export default function GeographicCoverage({ records }: Props) {
-  const states = new Set(records.map((r) => r.state)).size;
-  const districts = new Set(records.map((r) => r.district)).size;
-  const categories = new Set(records.map((r) => r.category)).size;
-  const datasets = new Set(records.map((r) => r.indicator)).size;
+  const states = distinct(records.map((r) => r.state));
+  const districts = distinct(records.map((r) => r.district));
+  const categories = distinct(records.map((r) => r.category));
+  const datasets = distinct(records.map((r) => r.indicatorName));
 
   const stats = [
     { label: "States covered", value: states, icon: <Globe className="h-4 w-4" /> },

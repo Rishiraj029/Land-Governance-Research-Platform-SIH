@@ -1,89 +1,99 @@
 /**
- * Dashboard types for PAGE 8 — Dashboards Hub
+ * Dashboard types for PAGE 8 — Dashboards Hub.
  *
- * IMPORTANT: This page uses a local prototype dataset for frontend demonstration.
- * Do NOT use these values for any real research, policy, or government purposes.
- * The production implementation will replace these types with Supabase-backed queries.
+ * These mirror the live Supabase table public.dashboard_indicators exactly.
+ * The table columns are:
+ *   id, indicator_name, category, state, district, year, value, unit,
+ *   source, description, created_at
+ * Do not add fields that the table does not have.
  */
 
 // ─────────────────────────────────────────────────
-// Dashboard categories (topic tabs in the hub)
+// One row of public.dashboard_indicators
 // ─────────────────────────────────────────────────
-export type DashboardCategory =
-  | "Land Governance Overview"
-  | "Land Use & Urbanization"
-  | "Tenure & Land Records"
-  | "Land Disputes"
-  | "Climate & Land"
-  | "Geospatial Governance";
-
-// ─────────────────────────────────────────────────
-// Indicator names used across the platform
-// ─────────────────────────────────────────────────
-export type IndicatorName =
-  | "Land Records Digitization"
-  | "Land Dispute Cases"
-  | "Urban Expansion Rate"
-  | "Tenure Security Index"
-  | "Climate Risk Index"
-  | "Research Datasets"
-  | "Districts Covered"
-  | "Tenure Coverage";
-
-// ─────────────────────────────────────────────────
-// Core data record — one row of prototype indicator data
-// ─────────────────────────────────────────────────
-export interface DashboardRecord {
+export interface DashboardIndicator {
   id: string;
-  state: string;
-  district: string;
-  year: number;
-  category: DashboardCategory;
-  indicator: IndicatorName;
-  value: number;
-  unit: string;
+  indicatorName: string;
+  category: string | null;
+  state: string | null;
+  district: string | null;
+  year: number | null;
+  /** Numeric measure. null when the database value was NULL or not a number. */
+  value: number | null;
+  unit: string | null;
+  source: string | null;
+  description: string | null;
+  createdAt: string | null;
 }
 
 // ─────────────────────────────────────────────────
-// Active filter state managed in Dashboards.tsx
+// Active filter state (single source of truth in Dashboards.tsx)
+// An empty string means "all".
 // ─────────────────────────────────────────────────
 export interface DashboardFilters {
-  state: string;       // "" → all states
-  year: string;        // "" → all years
-  category: string;    // "" → all categories (or overridden by selected tab)
-  district: string;    // "" → all districts
+  state: string;
+  district: string;
+  category: string;
+  year: string;
+  search: string;
+}
+
+/** Select options derived from the loaded rows — never hardcoded. */
+export interface DashboardFilterOptions {
+  states: string[];
+  /** Districts of the selected state (all districts when no state is selected). */
+  districts: string[];
+  categories: string[];
+  /** Descending, so the most recent year is first. */
+  years: number[];
 }
 
 // ─────────────────────────────────────────────────
-// KPI card definition
+// Dataset-level summary, computed from the loaded rows
 // ─────────────────────────────────────────────────
-export interface KPIDefinition {
-  id: string;
-  title: string;
-  indicator: IndicatorName;
-  unit: string;
-  description: string;
-  icon: string; // Lucide icon name string — rendered in component
-  higherIsBetter: boolean; // used to determine trend arrow color
-}
-
-// ─────────────────────────────────────────────────
-// Dataset metadata displayed in About section
-// ─────────────────────────────────────────────────
-export interface DashboardDatasetInfo {
-  name: string;
-  description: string;
+export interface DashboardDatasetMeta {
   recordCount: number;
   statesCovered: number;
+  districtsCovered: number;
+  categoriesCovered: number;
+  indicatorTypes: number;
+  /** e.g. "2021–2023", or "—" when no usable years exist. */
   yearRange: string;
-  lastUpdated: string;
-  source: string;
+  units: string[];
+  sources: string[];
+  lastUpdated: string | null;
+  /** True when the records describe themselves as illustrative/demo data. */
+  illustrative: boolean;
+  /** Which of the records' own words triggered the illustrative flag. */
+  illustrativeEvidence: string[];
+  /** Rows whose `value` is NULL or not a finite number. */
+  rowsMissingValue: number;
+  /** Rows with no indicator_name. */
+  rowsMissingIndicatorName: number;
 }
 
 // ─────────────────────────────────────────────────
-// Column sort state for data table
+// Result of the Supabase read
 // ─────────────────────────────────────────────────
-export type SortColumn = "state" | "year" | "indicator" | "value" | "unit" | "category";
+export interface DashboardLoadResult {
+  indicators: DashboardIndicator[];
+  /** Actionable message when the read failed; null on success. */
+  error: string | null;
+}
+
+// ─────────────────────────────────────────────────
+// Column sorting for the data table
+// ─────────────────────────────────────────────────
+export type SortColumn =
+  | "state"
+  | "district"
+  | "year"
+  | "indicatorName"
+  | "value"
+  | "unit"
+  | "category"
+  | "source";
+
 export type SortDirection = "asc" | "desc";
 
 export interface TableSort {

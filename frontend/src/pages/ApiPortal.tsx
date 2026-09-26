@@ -1,280 +1,367 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
+  AlertCircle,
+  Book,
+  Check,
+  Clock,
   Code,
   Copy,
-  Check,
-  Search,
-  Book,
-  Shield,
-  Clock,
+  Info,
   Play,
-  Terminal
+  Search,
+  Shield,
+  Terminal,
 } from "lucide-react";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
-import Toast from "../components/ui/Toast";
+
+/**
+ * Developer Portal.
+ *
+ * Documents only the endpoints that actually exist in backend/src/index.ts — `GET /api/health`
+ * and `POST /api/ai/search`. Request and response shapes are copied from that implementation,
+ * and the "Send request" controls perform real HTTP calls so what you see is the server's
+ * genuine reply. Nothing here advertises an API the platform does not have.
+ */
+
+/**
+ * Requests go to the relative `/api` path, which the Vite dev proxy forwards to the Express
+ * backend on port 4000. Set VITE_BACKEND_URL when the API is hosted on a different origin.
+ */
+const API_BASE = String(import.meta.env.VITE_BACKEND_URL ?? "").replace(/\/$/, "");
+
+interface EndpointParam {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}
+
+interface ErrorResponse {
+  status: number;
+  body: string;
+  meaning: string;
+}
 
 interface ApiEndpoint {
   id: string;
-  method: "GET" | "POST" | "PUT" | "DELETE";
+  group: string;
+  method: "GET" | "POST";
   path: string;
-  category: string;
-  description: string;
-  parameters: Array<{
-    name: string;
-    type: string;
-    required: boolean;
-    description: string;
-  }>;
-  response: any;
-  example: string;
+  summary: string;
+  purpose: string;
+  authentication: string;
+  params: EndpointParam[];
+  requestBody: string | null;
+  exampleRequest: string;
+  exampleResponse: string;
+  errors: ErrorResponse[];
+  notes: string[];
 }
 
-const API_ENDPOINTS: ApiEndpoint[] = [
+const ENDPOINTS: ApiEndpoint[] = [
   {
-    id: "repo-1",
-    method: "GET",
-    path: "/api/repository",
-    category: "Repository API",
-    description: "Get all research documents and datasets from the knowledge repository",
-    parameters: [
-      { name: "page", type: "number", required: false, description: "Page number for pagination" },
-      { name: "limit", type: "number", required: false, description: "Number of results per page" },
-      { name: "category", type: "string", required: false, description: "Filter by content category" },
-      { name: "theme", type: "string", required: false, description: "Filter by research theme" }
+    id: "ai-search",
+    group: "AI",
+    method: "POST",
+    path: "/api/ai/search",
+    summary: "Answer a research question using repository documents",
+    purpose:
+      "Selects the repository records whose IDs you supply, verifies them against Supabase, and asks Gemini for a concise research-oriented answer grounded only in those records. Returned citation markers refer to the supplied documents.",
+    authentication:
+      "No API key. Send the caller's Supabase access token as `Authorization: Bearer <token>` when available — the server forwards it to Supabase so row-level security is evaluated as that user. Without a token the server falls back to its public anon key.",
+    params: [
+      { name: "query", type: "string", required: true, description: "The research question. Maximum 1,000 characters." },
+      {
+        name: "documentIds",
+        type: "string[]",
+        required: true,
+        description:
+          "Repository document UUIDs used as grounding context. Invalid IDs are discarded; at most the first 10 valid IDs are used.",
+      },
     ],
-    response: {
-      success: true,
-      data: [
-        {
-          id: "1",
-          title: "Impact of Land Ceiling Reforms on Urban Housing Supply",
-          contentType: "Research Paper",
-          author: "Dr. Priya Sharma",
-          institution: "National Institute of Public Finance and Policy"
-        }
-      ],
-      pagination: { page: 1, limit: 20, total: 156 }
-    },
-    example: "GET /api/repository?page=1&limit=20&theme=Urbanization"
+    requestBody: `{
+  "query": "What are the major land governance issues discussed?",
+  "documentIds": ["03e208ed-3cf5-408c-adff-a51de7376b83"]
+}`,
+    exampleRequest: `curl -X POST ${API_BASE || "http://localhost:4000"}/api/ai/search \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "query": "What are the major land governance issues discussed?",
+    "documentIds": ["03e208ed-3cf5-408c-adff-a51de7376b83"]
+  }'`,
+    exampleResponse: `{
+  "answer": "The supplied records examine digitized land records and tenure security... [1]",
+  "model": "gemini-3.8-flash",
+  "disclaimer": "AI-generated response based on repository documents. Not official government advice.",
+  "supportingDocuments": [
+    {
+      "id": "03e208ed-3cf5-408c-adff-a51de7376b83",
+      "title": "Digital Land Records and Tenure Security",
+      "contentType": "Research Paper",
+      "theme": "Tenure Security",
+      "state": "Rajasthan",
+      "author": "Centre for Land Governance Research",
+      "institution": "National Land Policy Institute"
+    }
+  ]
+}`,
+    errors: [
+      { status: 400, body: `{ "error": "A search query is required." }`, meaning: "`query` is missing or blank." },
+      {
+        status: 400,
+        body: `{ "error": "Search questions must be 1,000 characters or fewer." }`,
+        meaning: "`query` exceeds the length limit.",
+      },
+      {
+        status: 200,
+        body: `{ "error": "No relevant repository documents were found for this query." }`,
+        meaning:
+          "`documentIds` was empty or none of the IDs matched a readable repository row. Gemini is not called — the server refuses to answer without grounding.",
+      },
+      {
+        status: 502,
+        body: `{ "error": "Repository documents could not be verified for the AI summary." }`,
+        meaning: "The server could not reach the repository database to verify the IDs.",
+      },
+      {
+        status: 503,
+        body: `{ "error": "AI search is not configured on this server (missing GEMINI_API_KEY)." }`,
+        meaning: "The server has no Gemini key configured.",
+      },
+      {
+        status: 503,
+        body: `{ "error": "AI search cannot verify repository documents. Configure SUPABASE_URL and SUPABASE_ANON_KEY on the server." }`,
+        meaning: "The server has no Supabase credentials configured.",
+      },
+      {
+        status: 503,
+        body: `{ "error": "AI service is temporarily unavailable. Please try again in a moment." }`,
+        meaning: "Every candidate Gemini model failed (for example capacity spikes). Retrying usually succeeds.",
+      },
+    ],
+    notes: [
+      "The Gemini API key lives only in the server's environment (`GEMINI_API_KEY`); it is never sent to or stored in the browser.",
+      "Only compact metadata plus truncated prose is sent to Gemini: description is cut to 300 characters and summary to 500.",
+      "Answers are grounded strictly in the supplied records. If those records do not contain the answer, the model is instructed to say the material is insufficient rather than improvise.",
+      "The model name that produced the response is returned in `model`. The server falls back across several Gemini models when one is retired or overloaded.",
+      "Output is not official government advice and should be verified against the source documents.",
+      "Request bodies are limited to 1 MB, and there is currently no rate limiting or API key management.",
+    ],
   },
   {
-    id: "repo-2",
+    id: "health",
+    group: "Platform",
     method: "GET",
-    path: "/api/repository/:id",
-    category: "Repository API",
-    description: "Get detailed information about a specific document or dataset",
-    parameters: [
-      { name: "id", type: "string", required: true, description: "Document ID" }
+    path: "/api/health",
+    summary: "Liveness probe",
+    purpose:
+      "Confirms the backend process is running and returns the server's current time. Useful as a connectivity check before calling the AI endpoint.",
+    authentication: "None — this endpoint is open.",
+    params: [],
+    requestBody: null,
+    exampleRequest: `curl ${API_BASE || "http://localhost:4000"}/api/health`,
+    exampleResponse: `{
+  "status": "ok",
+  "timestamp": "2026-09-26T04:15:22.000Z"
+}`,
+    errors: [
+      {
+        status: 0,
+        body: "No HTTP response",
+        meaning:
+          "The backend is not running, so the request fails at the network level (the browser reports a failed fetch).",
+      },
     ],
-    response: {
-      success: true,
-      data: {
-        id: "1",
-        title: "Impact of Land Ceiling Reforms on Urban Housing Supply",
-        contentType: "Research Paper",
-        description: "Comprehensive analysis of land ceiling repeal effects across 5 major states",
-        author: "Dr. Priya Sharma",
-        institution: "National Institute of Public Finance and Policy",
-        publishDate: "2024-03-15",
-        themes: ["Urbanization", "Land Disputes"]
-      }
-    },
-    example: "GET /api/repository/1"
+    notes: [
+      "CORS is restricted to the origin in the server's `FRONTEND_URL`, which defaults to http://localhost:5173.",
+      "With the Vite dev server running, call it through the proxy at the relative path /api/health.",
+    ],
   },
-  {
-    id: "gis-1",
-    method: "GET",
-    path: "/api/gis/features",
-    category: "GIS Data API",
-    description: "Get geospatial features and layers for the GIS Explorer",
-    parameters: [
-      { name: "layer", type: "string", required: false, description: "Specific layer name" },
-      { name: "bbox", type: "string", required: false, description: "Bounding box coordinates" },
-      { name: "state", type: "string", required: false, description: "Filter by state" }
-    ],
-    response: {
-      success: true,
-      data: {
-        type: "FeatureCollection",
-        features: [
-          {
-            type: "Feature",
-            properties: { name: "Maharashtra", land_use: "Mixed" },
-            geometry: { type: "Polygon", coordinates: [] }
-          }
-        ]
-      }
-    },
-    example: "GET /api/gis/features?layer=land_use&state=Maharashtra"
-  },
-  {
-    id: "dash-1",
-    method: "GET",
-    path: "/api/dashboards/indicators",
-    category: "Dashboard Indicators API",
-    description: "Get dashboard indicators and KPI data for policy dashboards",
-    parameters: [
-      { name: "dashboard", type: "string", required: false, description: "Dashboard type" },
-      { name: "indicator", type: "string", required: false, description: "Specific indicator name" },
-      { name: "state", type: "string", required: false, description: "Filter by state" }
-    ],
-    response: {
-      success: true,
-      data: {
-        indicators: [
-          {
-            name: "Land Dispute Rate",
-            value: 12.5,
-            unit: "cases per 1000 people",
-            trend: "decreasing"
-          }
-        ]
-      }
-    },
-    example: "GET /api/dashboards/indicators?dashboard=land_disputes&state=Maharashtra"
-  },
-  {
-    id: "ws-1",
-    method: "GET",
-    path: "/api/workspaces",
-    category: "Workspace API",
-    description: "Get all collaborative workspaces",
-    parameters: [
-      { name: "status", type: "string", required: false, description: "Filter by workspace status" },
-      { name: "theme", type: "string", required: false, description: "Filter by research theme" }
-    ],
-    response: {
-      success: true,
-      data: [
-        {
-          id: "ws-1",
-          name: "Rajasthan Land Records Modernization",
-          description: "Comprehensive study of digital land record implementation",
-          status: "Active",
-          memberCount: 12
-        }
-      ]
-    },
-    example: "GET /api/workspaces?status=Active"
-  },
-  {
-    id: "inv-1",
-    method: "GET",
-    path: "/api/innovations",
-    category: "Innovation API",
-    description: "Get all innovation submissions and hackathon entries",
-    parameters: [
-      { name: "category", type: "string", required: false, description: "Filter by innovation category" },
-      { name: "status", type: "string", required: false, description: "Filter by submission status" }
-    ],
-    response: {
-      success: true,
-      data: [
-        {
-          id: "inv-1",
-          title: "AI-Powered Land Dispute Prediction System",
-          category: "Legal & Dispute Resolution",
-          status: "Shortlisted",
-          votes: 127
-        }
-      ]
-    },
-    example: "GET /api/innovations?category=Legal%20&%20Dispute%20Resolution"
-  }
 ];
 
-const API_CATEGORIES = ["Repository API", "GIS Data API", "Dashboard Indicators API", "Workspace API", "Innovation API"];
+const GROUPS = ["All", "Platform", "AI"];
+
+function CodeBlock({ code, label, onCopy, copied }: { code: string; label: string; onCopy: (code: string) => void; copied: boolean }) {
+  return (
+    <div className="min-w-0">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-[#1F2933]">{label}</span>
+        <button
+          type="button"
+          onClick={() => onCopy(code)}
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-[#0B3D91] hover:text-[#FF9933] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91]"
+        >
+          {copied ? <Check className="h-3 w-3" aria-hidden="true" /> : <Copy className="h-3 w-3" aria-hidden="true" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {/* overflow-x-auto keeps long payloads scrollable instead of breaking the layout */}
+      <div className="overflow-x-auto rounded-lg bg-[#1F2933] p-4">
+        <pre className="text-xs leading-5 text-[#8CE99A]">
+          <code className="font-mono">{code}</code>
+        </pre>
+      </div>
+    </div>
+  );
+}
 
 export default function ApiPortal() {
-  const [selectedCategory, setSelectedCategory] = useState<string>("All");
+  const [selectedGroup, setSelectedGroup] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint | null>(null);
-  const [showTryApi, setShowTryApi] = useState(false);
-  const [apiResponse, setApiResponse] = useState<any>(null);
-  const [showToast, setShowToast] = useState(false);
-  const [toastMessage, setToastMessage] = useState("");
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
-  const filteredEndpoints = API_ENDPOINTS.filter(endpoint => {
-    const matchesCategory = selectedCategory === "All" || endpoint.category === selectedCategory;
-    const matchesSearch = endpoint.path.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         endpoint.description.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
+  const [healthStatus, setHealthStatus] = useState<"checking" | "up" | "down">("checking");
+  /** Bumped by the Recheck button to re-run the probe below. */
+  const [healthCheckToken, setHealthCheckToken] = useState(0);
+
+  // Real request runner state
+  const [activeEndpoint, setActiveEndpoint] = useState<ApiEndpoint | null>(null);
+  const [requestBody, setRequestBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [response, setResponse] = useState<{ status: number; ok: boolean; body: string } | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
+
+  // Real liveness probe against the backend, so the status shown here is not hardcoded.
+  useEffect(() => {
+    let current = true;
+    fetch(`${API_BASE}/api/health`)
+      .then((result) => {
+        if (current) setHealthStatus(result.ok ? "up" : "down");
+      })
+      .catch(() => {
+        if (current) setHealthStatus("down");
+      });
+    return () => {
+      current = false;
+    };
+  }, [healthCheckToken]);
+
+  const filteredEndpoints = ENDPOINTS.filter((endpoint) => {
+    const matchesGroup = selectedGroup === "All" || endpoint.group === selectedGroup;
+    const haystack = `${endpoint.path} ${endpoint.summary} ${endpoint.purpose}`.toLowerCase();
+    return matchesGroup && haystack.includes(searchQuery.toLowerCase());
   });
 
-  const handleCopyCode = (code: string) => {
-    navigator.clipboard.writeText(code);
+  function copyCode(code: string) {
+    void navigator.clipboard.writeText(code);
     setCopiedCode(code);
-    setToastMessage("Code copied to clipboard");
-    setShowToast(true);
-    setTimeout(() => {
-      setShowToast(false);
-      setCopiedCode(null);
-    }, 2000);
-  };
+    setTimeout(() => setCopiedCode(null), 2000);
+  }
 
-  const handleTryApi = (endpoint: ApiEndpoint) => {
-    setSelectedEndpoint(endpoint);
-    setShowTryApi(true);
-    // Simulate API call with mock response
-    setTimeout(() => {
-      setApiResponse(endpoint.response);
-    }, 500);
-  };
+  function openRunner(endpoint: ApiEndpoint) {
+    setActiveEndpoint(endpoint);
+    setRequestBody(endpoint.requestBody ?? "");
+    setResponse(null);
+    setRequestError(null);
+  }
 
-  const getMethodColor = (method: string) => {
-    switch (method) {
-      case "GET":
-        return "bg-[#138808]/10 text-[#138808] border-[#138808]/20";
-      case "POST":
-        return "bg-[#0B3D91]/10 text-[#0B3D91] border-[#0B3D91]/20";
-      case "PUT":
-        return "bg-[#FF9933]/10 text-[#FF9933] border-[#FF9933]/20";
-      case "DELETE":
-        return "bg-red-100 text-red-600 border-red-200";
-      default:
-        return "bg-gray-100 text-gray-600 border-gray-200";
+  /** Perform the documented request for real and show the server's actual reply. */
+  async function sendRequest() {
+    if (!activeEndpoint || sending) return;
+
+    setSending(true);
+    setRequestError(null);
+    setResponse(null);
+
+    try {
+      const init: RequestInit =
+        activeEndpoint.method === "GET"
+          ? { method: "GET" }
+          : { method: "POST", headers: { "Content-Type": "application/json" }, body: requestBody };
+
+      const result = await fetch(`${API_BASE}${activeEndpoint.path}`, init);
+      const raw = await result.text();
+
+      let pretty = raw;
+      try {
+        pretty = JSON.stringify(JSON.parse(raw), null, 2);
+      } catch {
+        // Non-JSON (for example an HTML gateway page) is shown verbatim.
+      }
+      setResponse({ status: result.status, ok: result.ok, body: pretty });
+    } catch {
+      setRequestError(
+        "The request did not reach the server. Start the backend (npm run dev in backend/) and try again."
+      );
+    } finally {
+      setSending(false);
     }
-  };
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-[#F5F7FA]">
       <Navbar />
-      
+
       <main className="flex-1">
         {/* Page Header */}
         <div className="border-b border-[#E1E5EA] bg-white">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div className="flex-1">
-                <div className="flex items-center gap-3 mb-2">
+                <div className="mb-2 flex flex-wrap items-center gap-3">
                   <h1 className="text-3xl font-bold text-[#1F2933]">Developer Portal</h1>
-                  <span className="inline-flex items-center rounded-full bg-[#FF9933]/10 px-2.5 py-0.5 text-xs font-medium text-[#FF9933] border border-[#FF9933]/20">
-                    Prototype API Documentation
+                  <span className="inline-flex items-center rounded-full border border-[#138808]/20 bg-[#138808]/10 px-2.5 py-0.5 text-xs font-medium text-[#138808]">
+                    Live backend endpoints
                   </span>
                 </div>
-                <p className="text-[#5A6472] max-w-2xl">
-                  Explore and test the platform's REST APIs for repository access, GIS data, dashboards, workspaces, and innovation submissions.
+                <p className="max-w-2xl text-[#5A6472]">
+                  Reference for the platform&apos;s backend HTTP API. Only endpoints that are
+                  currently implemented are documented here, and each one can be called for real
+                  from this page.
                 </p>
               </div>
-              
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 text-sm">
-                  <div className="w-2 h-2 bg-[#138808] rounded-full animate-pulse" />
-                  <span className="text-[#138808] font-medium">API Status: Operational</span>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 text-sm" role="status">
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      healthStatus === "up" ? "bg-[#138808]" : healthStatus === "down" ? "bg-[#D64545]" : "bg-[#E8A33D]"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span
+                    className={
+                      healthStatus === "up"
+                        ? "font-medium text-[#138808]"
+                        : healthStatus === "down"
+                          ? "font-medium text-[#D64545]"
+                          : "font-medium text-[#8A5A12]"
+                    }
+                  >
+                    {healthStatus === "up"
+                      ? "Backend reachable"
+                      : healthStatus === "down"
+                        ? "Backend unreachable"
+                        : "Checking backend…"}
+                  </span>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHealthStatus("checking");
+                    setHealthCheckToken((token) => token + 1);
+                  }}
+                  className="rounded-md border border-[#D0D5DD] px-3 py-1.5 text-xs font-medium text-[#344054] hover:bg-[#F5F7FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91]"
+                >
+                  Recheck
+                </button>
               </div>
             </div>
 
             {/* Search Bar */}
-            <div className="mt-6 relative max-w-2xl">
-              <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#5A6472]" />
+            <div className="relative mt-6 max-w-2xl">
+              <Search className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#5A6472]" aria-hidden="true" />
+              <label htmlFor="api-endpoint-search" className="sr-only">
+                Search API endpoints by path or description
+              </label>
               <input
+                id="api-endpoint-search"
                 type="text"
-                placeholder="Search API endpoints by path or description..."
+                placeholder="Search endpoints by path, summary or purpose…"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(event) => setSearchQuery(event.target.value)}
                 className="w-full rounded-full border border-[#E1E5EA] bg-[#F5F7FA] py-3 pl-12 pr-4 text-base text-[#1F2933] placeholder:text-[#5A6472] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
               />
             </div>
@@ -282,260 +369,376 @@ export default function ApiPortal() {
         </div>
 
         {/* Main Content */}
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
           <div className="flex gap-8">
-            {/* Left Sidebar */}
-            <aside className="hidden lg:block w-64 flex-shrink-0">
+            {/* Sidebar */}
+            <aside className="hidden w-64 flex-shrink-0 lg:block">
               <div className="sticky top-24 space-y-6">
-                <h2 className="text-sm font-semibold text-[#1F2933]">API Categories</h2>
+                <h2 className="text-sm font-semibold text-[#1F2933]">API Groups</h2>
                 <div className="space-y-2">
-                  <button
-                    onClick={() => setSelectedCategory("All")}
-                    className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                      selectedCategory === "All" ? "bg-[#0B3D91] text-white" : "text-[#5A6472] hover:bg-[#F5F7FA]"
-                    }`}
-                  >
-                    All APIs
-                  </button>
-                  {API_CATEGORIES.map(category => (
+                  {GROUPS.map((group) => (
                     <button
-                      key={category}
-                      onClick={() => setSelectedCategory(category)}
-                      className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                        selectedCategory === category ? "bg-[#0B3D91] text-white" : "text-[#5A6472] hover:bg-[#F5F7FA]"
+                      key={group}
+                      type="button"
+                      onClick={() => setSelectedGroup(group)}
+                      className={`w-full rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91] ${
+                        selectedGroup === group ? "bg-[#0B3D91] text-white" : "text-[#5A6472] hover:bg-[#F5F7FA]"
                       }`}
                     >
-                      {category}
+                      {group === "All" ? "All endpoints" : group}
                     </button>
                   ))}
                 </div>
 
-                <div className="pt-6 border-t border-[#E1E5EA]">
-                  <h3 className="text-xs font-medium text-[#5A6472] mb-3">Quick Links</h3>
+                <div className="border-t border-[#E1E5EA] pt-6">
+                  <h3 className="mb-3 text-xs font-medium text-[#5A6472]">On this page</h3>
                   <div className="space-y-2">
-                    <a href="#" className="flex items-center gap-2 text-sm text-[#0B3D91] hover:text-[#FF9933]">
-                      <Book className="h-4 w-4" />
-                      Getting Started
+                    <a href="#overview" className="flex items-center gap-2 text-sm text-[#0B3D91] hover:text-[#FF9933]">
+                      <Book className="h-4 w-4" aria-hidden="true" />
+                      API Overview
                     </a>
-                    <a href="#" className="flex items-center gap-2 text-sm text-[#0B3D91] hover:text-[#FF9933]">
-                      <Shield className="h-4 w-4" />
+                    <a href="#authentication" className="flex items-center gap-2 text-sm text-[#0B3D91] hover:text-[#FF9933]">
+                      <Shield className="h-4 w-4" aria-hidden="true" />
                       Authentication
                     </a>
-                    <a href="#" className="flex items-center gap-2 text-sm text-[#0B3D91] hover:text-[#FF9933]">
-                      <Clock className="h-4 w-4" />
-                      Rate Limits
+                    <a href="#limitations" className="flex items-center gap-2 text-sm text-[#0B3D91] hover:text-[#FF9933]">
+                      <Clock className="h-4 w-4" aria-hidden="true" />
+                      Limitations
                     </a>
                   </div>
                 </div>
               </div>
             </aside>
 
-            {/* Main Content Area */}
-            <div className="flex-1">
-              {/* API Overview */}
-              <div className="mb-8 bg-white border border-[#E1E5EA] rounded-lg p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-[#1F2933] mb-4">API Overview</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Content */}
+            <div className="min-w-0 flex-1">
+              {/* Overview */}
+              <section id="overview" className="mb-8 scroll-mt-24 rounded-lg border border-[#E1E5EA] bg-white p-6 shadow-sm">
+                <h2 className="mb-4 text-lg font-semibold text-[#1F2933]">API Overview</h2>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 w-10 h-10 bg-[#0B3D91]/10 rounded-lg flex items-center justify-center">
-                      <Code className="h-5 w-5 text-[#0B3D91]" />
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-[#0B3D91]/10">
+                      <Code className="h-5 w-5 text-[#0B3D91]" aria-hidden="true" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-medium text-[#1F2933]">RESTful API</h3>
-                      <p className="text-xs text-[#5A6472]">Standard REST endpoints with JSON responses</p>
+                      <h3 className="text-sm font-medium text-[#1F2933]">REST over JSON</h3>
+                      <p className="text-xs text-[#5A6472]">
+                        Two implemented endpoints on one Express service, returning JSON.
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 w-10 h-10 bg-[#138808]/10 rounded-lg flex items-center justify-center">
-                      <Shield className="h-5 w-5 text-[#138808]" />
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-[#138808]/10">
+                      <Shield className="h-5 w-5 text-[#138808]" aria-hidden="true" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-medium text-[#1F2933]">API Key Auth</h3>
-                      <p className="text-xs text-[#5A6472]">Secure authentication with API keys</p>
+                      <h3 className="text-sm font-medium text-[#1F2933]">Server-side secrets</h3>
+                      <p className="text-xs text-[#5A6472]">
+                        The Gemini key and Supabase credentials stay on the server.
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 w-10 h-10 bg-[#FF9933]/10 rounded-lg flex items-center justify-center">
-                      <Clock className="h-5 w-5 text-[#FF9933]" />
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-[#FF9933]/10">
+                      <Info className="h-5 w-5 text-[#FF9933]" aria-hidden="true" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-medium text-[#1F2933]">Rate Limited</h3>
-                      <p className="text-xs text-[#5A6472]">1000 requests per minute per API key</p>
+                      <h3 className="text-sm font-medium text-[#1F2933]">Base URL</h3>
+                      <p className="break-all font-mono text-xs text-[#5A6472]">
+                        {API_BASE || "this origin (proxied to :4000)"}
+                      </p>
                     </div>
                   </div>
                 </div>
-              </div>
+              </section>
 
-              {/* Endpoints List */}
+              {/* Authentication */}
+              <section id="authentication" className="mb-8 scroll-mt-24 rounded-lg border border-[#E1E5EA] bg-white p-6 shadow-sm">
+                <h2 className="mb-3 text-lg font-semibold text-[#1F2933]">Authentication</h2>
+                <p className="text-sm text-[#5A6472]">
+                  Neither endpoint requires an API key. There is no API key issuance or quota
+                  system in the platform yet.
+                </p>
+                <ul className="mt-3 list-disc space-y-1.5 pl-5 text-sm text-[#5A6472]">
+                  <li>
+                    <code className="rounded bg-[#F5F7FA] px-1 py-0.5 font-mono text-xs">POST /api/ai/search</code>{" "}
+                    accepts an optional Supabase access token in{" "}
+                    <code className="rounded bg-[#F5F7FA] px-1 py-0.5 font-mono text-xs">Authorization: Bearer</code>.
+                    The server forwards it to the repository database so row-level security is applied to
+                    the requesting user; otherwise the server&apos;s public anon key is used.
+                  </li>
+                  <li>
+                    Browser clients normally do not need to send a token, because the Vite dev proxy
+                    forwards <code className="rounded bg-[#F5F7FA] px-1 py-0.5 font-mono text-xs">/api</code>{" "}
+                    to the backend on the same origin.
+                  </li>
+                  <li>
+                    Cross-origin calls are accepted only from the origin configured in the server&apos;s{" "}
+                    <code className="rounded bg-[#F5F7FA] px-1 py-0.5 font-mono text-xs">FRONTEND_URL</code>.
+                  </li>
+                </ul>
+              </section>
+
+              {/* Endpoints */}
               <div className="space-y-4">
-                <h2 className="text-lg font-semibold text-[#1F2933]">Available Endpoints</h2>
-                
-                {filteredEndpoints.length === 0 ? (
-                  <div className="text-center py-12 bg-white border border-[#E1E5EA] rounded-lg">
-                    <Code className="h-12 w-12 text-[#5A6472] mx-auto mb-4" />
-                    <h3 className="text-lg font-medium text-[#1F2933] mb-2">No endpoints found</h3>
-                    <p className="text-[#5A6472]">
-                      Try adjusting your search or category filter
-                    </p>
+                <h2 className="text-lg font-semibold text-[#1F2933]">
+                  Available Endpoints ({filteredEndpoints.length})
+                </h2>
+
+                {filteredEndpoints.length === 0 && (
+                  <div className="rounded-lg border border-[#E1E5EA] bg-white py-12 text-center">
+                    <Code className="mx-auto mb-4 h-12 w-12 text-[#5A6472]" aria-hidden="true" />
+                    <h3 className="mb-2 text-lg font-medium text-[#1F2933]">No endpoints found</h3>
+                    <p className="text-[#5A6472]">Try a different search term or group.</p>
                   </div>
-                ) : (
-                  filteredEndpoints.map((endpoint) => (
-                    <div
-                      key={endpoint.id}
-                      className="bg-white border border-[#E1E5EA] rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow"
-                    >
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-center gap-3">
-                          <span className={`inline-flex items-center rounded px-2 py-1 text-xs font-medium border ${getMethodColor(endpoint.method)}`}>
-                            {endpoint.method}
-                          </span>
-                          <code className="text-sm font-mono text-[#0B3D91]">{endpoint.path}</code>
-                        </div>
-                        <button
-                          onClick={() => handleTryApi(endpoint)}
-                          className="inline-flex items-center gap-2 text-sm text-[#0B3D91] hover:text-[#FF9933]"
+                )}
+
+                {filteredEndpoints.map((endpoint) => (
+                  <article key={endpoint.id} className="rounded-lg border border-[#E1E5EA] bg-white p-6 shadow-sm">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex min-w-0 flex-wrap items-center gap-3">
+                        <span
+                          className={`inline-flex items-center rounded border px-2 py-1 text-xs font-semibold ${
+                            endpoint.method === "GET"
+                              ? "border-[#138808]/20 bg-[#138808]/10 text-[#138808]"
+                              : "border-[#0B3D91]/20 bg-[#0B3D91]/10 text-[#0B3D91]"
+                          }`}
                         >
-                          <Play className="h-4 w-4" />
-                          Try API
-                        </button>
+                          {endpoint.method}
+                        </span>
+                        <code className="break-all font-mono text-sm text-[#0B3D91]">{endpoint.path}</code>
                       </div>
-                      
-                      <p className="text-sm text-[#5A6472] mb-4">{endpoint.description}</p>
-                      
-                      <div className="mb-4">
-                        <h4 className="text-xs font-medium text-[#1F2933] mb-2">Parameters</h4>
-                        <div className="bg-[#F5F7FA] rounded-lg p-3">
-                          <table className="w-full text-sm">
+                      <button
+                        type="button"
+                        onClick={() => openRunner(endpoint)}
+                        className="inline-flex items-center gap-2 rounded-md border border-[#0B3D91] px-3 py-1.5 text-sm font-medium text-[#0B3D91] hover:bg-[#F0F5FF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91]"
+                      >
+                        <Play className="h-4 w-4" aria-hidden="true" />
+                        Send request
+                      </button>
+                    </div>
+
+                    <p className="text-sm font-medium text-[#1F2933]">{endpoint.summary}</p>
+                    <p className="mt-1 text-sm text-[#5A6472]">{endpoint.purpose}</p>
+
+                    <p className="mt-3 flex items-start gap-2 rounded-md border border-[#E1E5EA] bg-[#F5F7FA] p-3 text-xs text-[#5A6472]">
+                      <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#0B3D91]" aria-hidden="true" />
+                      <span>
+                        <strong className="font-semibold text-[#344054]">Authentication: </strong>
+                        {endpoint.authentication}
+                      </span>
+                    </p>
+
+                    {endpoint.params.length > 0 && (
+                      <div className="mt-4 min-w-0">
+                        <h3 className="mb-2 text-xs font-medium text-[#1F2933]">Request fields</h3>
+                        <div className="overflow-x-auto rounded-lg bg-[#F5F7FA] p-3">
+                          <table className="w-full min-w-[32rem] text-left text-sm">
                             <thead>
-                              <tr className="text-left text-[#5A6472]">
-                                <th className="pb-2">Name</th>
-                                <th className="pb-2">Type</th>
-                                <th className="pb-2">Required</th>
-                                <th className="pb-2">Description</th>
+                              <tr className="text-[#5A6472]">
+                                <th scope="col" className="pb-2 font-medium">Field</th>
+                                <th scope="col" className="pb-2 font-medium">Type</th>
+                                <th scope="col" className="pb-2 font-medium">Required</th>
+                                <th scope="col" className="pb-2 font-medium">Description</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {endpoint.parameters.map((param, idx) => (
-                                <tr key={idx} className="border-t border-[#E1E5EA]">
-                                  <td className="py-2 font-mono text-[#0B3D91]">{param.name}</td>
-                                  <td className="py-2 text-[#5A6472]">{param.type}</td>
-                                  <td className="py-2">
+                              {endpoint.params.map((param) => (
+                                <tr key={param.name} className="border-t border-[#E1E5EA]">
+                                  <td className="py-2 font-mono text-xs text-[#0B3D91]">{param.name}</td>
+                                  <td className="py-2 text-xs text-[#5A6472]">{param.type}</td>
+                                  <td className="py-2 text-xs">
                                     {param.required ? (
-                                      <span className="text-red-600">Yes</span>
+                                      <span className="text-[#D64545]">Yes</span>
                                     ) : (
                                       <span className="text-[#5A6472]">No</span>
                                     )}
                                   </td>
-                                  <td className="py-2 text-[#5A6472]">{param.description}</td>
+                                  <td className="py-2 text-xs text-[#5A6472]">{param.description}</td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
                         </div>
                       </div>
-                      
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className="text-xs font-medium text-[#1F2933]">Example Request</h4>
-                          <button
-                            onClick={() => handleCopyCode(endpoint.example)}
-                            className="text-xs text-[#0B3D91] hover:text-[#FF9933] flex items-center gap-1"
-                          >
-                            {copiedCode === endpoint.example ? (
-                              <>
-                                <Check className="h-3 w-3" />
-                                Copied
-                              </>
-                            ) : (
-                              <>
-                                <Copy className="h-3 w-3" />
-                                Copy
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        <div className="bg-[#1F2933] rounded-lg p-3">
-                          <code className="text-sm text-green-400 font-mono">{endpoint.example}</code>
-                        </div>
-                      </div>
+                    )}
+
+                    <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-2">
+                      {endpoint.requestBody && (
+                        <CodeBlock
+                          label="Request body"
+                          code={endpoint.requestBody}
+                          onCopy={copyCode}
+                          copied={copiedCode === endpoint.requestBody}
+                        />
+                      )}
+                      <CodeBlock
+                        label="Example request"
+                        code={endpoint.exampleRequest}
+                        onCopy={copyCode}
+                        copied={copiedCode === endpoint.exampleRequest}
+                      />
+                      <CodeBlock
+                        label="Example response"
+                        code={endpoint.exampleResponse}
+                        onCopy={copyCode}
+                        copied={copiedCode === endpoint.exampleResponse}
+                      />
                     </div>
-                  ))
-                )}
+
+                    <div className="mt-4">
+                      <h3 className="mb-2 text-xs font-medium text-[#1F2933]">Error responses</h3>
+                      <ul className="space-y-2">
+                        {endpoint.errors.map((error) => (
+                          <li key={`${error.status}-${error.body}`} className="rounded-md border border-[#E1E5EA] p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded bg-[#D64545]/10 px-2 py-0.5 font-mono text-xs font-semibold text-[#D64545]">
+                                {error.status === 0 ? "network" : error.status}
+                              </span>
+                              <code className="break-all font-mono text-xs text-[#5A6472]">{error.body}</code>
+                            </div>
+                            <p className="mt-1.5 text-xs text-[#5A6472]">{error.meaning}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="mt-4">
+                      <h3 className="mb-2 text-xs font-medium text-[#1F2933]">Notes and limitations</h3>
+                      <ul className="list-disc space-y-1.5 pl-5 text-xs text-[#5A6472]">
+                        {endpoint.notes.map((note) => (
+                          <li key={note}>{note}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </article>
+                ))}
               </div>
+
+              {/* Limitations */}
+              <section id="limitations" className="mt-8 scroll-mt-24 rounded-lg border border-[#E1E5EA] bg-white p-6 shadow-sm">
+                <h2 className="mb-3 text-lg font-semibold text-[#1F2933]">Platform-wide limitations</h2>
+                <ul className="list-disc space-y-1.5 pl-5 text-sm text-[#5A6472]">
+                  <li>
+                    Repository, GIS, dashboard, workspace and innovation data are currently read
+                    directly from Supabase by the web client; there are no public REST endpoints for
+                    them, so none are documented here.
+                  </li>
+                  <li>There is no API key management, rate limiting or usage-quota system.</li>
+                  <li>
+                    AI answers depend on a third-party model. Capacity spikes can make a request fail;
+                    retrying is usually enough.
+                  </li>
+                  <li>No OGC/WMS/WFS or GraphQL interfaces are implemented.</li>
+                </ul>
+              </section>
             </div>
           </div>
         </div>
 
-        {/* Try API Modal */}
-        {showTryApi && selectedEndpoint && (
-          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between p-6 border-b border-[#E1E5EA]">
+        {/* Live request runner */}
+        {activeEndpoint && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div
+              className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="api-runner-heading"
+            >
+              <div className="flex items-center justify-between border-b border-[#E1E5EA] p-6">
                 <div className="flex items-center gap-3">
-                  <Terminal className="h-5 w-5 text-[#0B3D91]" />
-                  <h2 className="text-xl font-semibold text-[#1F2933]">Try API</h2>
+                  <Terminal className="h-5 w-5 text-[#0B3D91]" aria-hidden="true" />
+                  <h2 id="api-runner-heading" className="text-xl font-semibold text-[#1F2933]">
+                    Send request
+                  </h2>
                 </div>
                 <button
-                  onClick={() => setShowTryApi(false)}
-                  className="p-2 hover:bg-[#F5F7FA] rounded-full text-[#5A6472]"
+                  type="button"
+                  onClick={() => setActiveEndpoint(null)}
+                  className="rounded-full p-2 text-[#5A6472] hover:bg-[#F5F7FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91]"
+                  aria-label="Close"
                 >
                   ×
                 </button>
               </div>
 
-              <div className="p-6 space-y-6">
-                {/* Request */}
+              <div className="flex-1 space-y-6 overflow-y-auto p-6">
                 <div>
-                  <h3 className="text-sm font-medium text-[#1F2933] mb-3">Request</h3>
-                  <div className="bg-[#F5F7FA] rounded-lg p-4">
-                    <div className="flex items-center gap-3 mb-3">
-                      <span className={`inline-flex items-center rounded px-2 py-1 text-xs font-medium border ${getMethodColor(selectedEndpoint.method)}`}>
-                        {selectedEndpoint.method}
-                      </span>
-                      <code className="text-sm font-mono text-[#0B3D91]">{selectedEndpoint.path}</code>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setApiResponse(selectedEndpoint.response);
-                        setToastMessage("API request executed successfully");
-                        setShowToast(true);
-                        setTimeout(() => setShowToast(false), 3000);
-                      }}
-                      className="inline-flex items-center gap-2 bg-[#0B3D91] text-white px-4 py-2 rounded-md text-sm hover:bg-[#062A63] transition-colors"
+                  <div className="mb-3 flex flex-wrap items-center gap-3">
+                    <span
+                      className={`inline-flex items-center rounded border px-2 py-1 text-xs font-semibold ${
+                        activeEndpoint.method === "GET"
+                          ? "border-[#138808]/20 bg-[#138808]/10 text-[#138808]"
+                          : "border-[#0B3D91]/20 bg-[#0B3D91]/10 text-[#0B3D91]"
+                      }`}
                     >
-                      <Play className="h-4 w-4" />
-                      Execute Request
-                    </button>
+                      {activeEndpoint.method}
+                    </span>
+                    <code className="break-all font-mono text-sm text-[#0B3D91]">{activeEndpoint.path}</code>
                   </div>
+
+                  {activeEndpoint.requestBody !== null && (
+                    <div className="mb-3">
+                      <label htmlFor="api-runner-body" className="mb-1.5 block text-sm font-medium text-[#344054]">
+                        Request body (JSON)
+                      </label>
+                      <textarea
+                        id="api-runner-body"
+                        rows={7}
+                        value={requestBody}
+                        onChange={(event) => setRequestBody(event.target.value)}
+                        spellCheck={false}
+                        className="w-full rounded-md border border-[#D0D5DD] bg-[#F9FAFB] p-3 font-mono text-xs text-[#1F2933] outline-none focus:border-[#0B3D91] focus:ring-2 focus:ring-[#0B3D91]/20"
+                      />
+                      <p className="mt-1 text-xs text-[#5A6472]">
+                        Use real repository document UUIDs.{" "}
+                        <Link to="/repository" className="font-medium text-[#0B3D91] hover:underline">
+                          Open the repository
+                        </Link>{" "}
+                        and copy an ID from a document page.
+                      </p>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => void sendRequest()}
+                    disabled={sending}
+                    className="inline-flex items-center gap-2 rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-[#062A63] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91] focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-70"
+                  >
+                    <Play className="h-4 w-4" aria-hidden="true" />
+                    {sending ? "Sending…" : "Execute request"}
+                  </button>
                 </div>
 
-                {/* Response */}
-                {apiResponse && (
+                {requestError && (
+                  <div className="flex items-start gap-2 rounded-md border border-[#F1C6C3] bg-[#FFF7F6] p-4 text-sm text-[#9E2A22]" role="alert">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    {requestError}
+                  </div>
+                )}
+
+                {response && (
                   <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-medium text-[#1F2933]">Response</h3>
-                      <button
-                        onClick={() => handleCopyCode(JSON.stringify(apiResponse, null, 2))}
-                        className="text-xs text-[#0B3D91] hover:text-[#FF9933] flex items-center gap-1"
+                    <div className="mb-2 flex flex-wrap items-center gap-3">
+                      <span
+                        className={`rounded px-2 py-0.5 font-mono text-xs font-semibold ${
+                          response.ok ? "bg-[#138808]/10 text-[#138808]" : "bg-[#D64545]/10 text-[#D64545]"
+                        }`}
                       >
-                        <Copy className="h-3 w-3" />
-                        Copy JSON
-                      </button>
+                        HTTP {response.status}
+                      </span>
+                      <span className="text-xs text-[#5A6472]">
+                        Real response returned by the backend
+                      </span>
                     </div>
-                    <div className="bg-[#1F2933] rounded-lg p-4 overflow-x-auto">
-                      <pre className="text-sm text-green-400 font-mono">
-                        {JSON.stringify(apiResponse, null, 2)}
+                    <div className="max-h-80 overflow-auto rounded-lg bg-[#1F2933] p-4">
+                      <pre className="text-xs leading-5 text-[#8CE99A]">
+                        <code className="font-mono">{response.body}</code>
                       </pre>
                     </div>
                   </div>
                 )}
-
-                {/* Prototype Notice */}
-                <div className="bg-[#FF9933]/10 border border-[#FF9933]/20 rounded-lg p-4">
-                  <p className="text-sm text-[#FF9933]">
-                    <strong>Prototype Notice:</strong> This is a frontend prototype API interface. The endpoints shown are documentation examples for future implementation. No actual backend API calls are being made.
-                  </p>
-                </div>
               </div>
             </div>
           </div>
@@ -543,14 +746,6 @@ export default function ApiPortal() {
       </main>
 
       <Footer />
-
-      {/* Toast */}
-      {showToast && (
-        <Toast
-          message={toastMessage}
-          onClose={() => setShowToast(false)}
-        />
-      )}
     </div>
   );
 }

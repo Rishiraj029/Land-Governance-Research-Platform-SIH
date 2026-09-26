@@ -18,7 +18,7 @@ export default function Footer() {
                 </span>
               </div>
               <p className="text-sm text-[#5A6472] mb-4">
-                India's national platform for land governance research and policy innovation.
+                Research and policy innovation for land governance.
               </p>
               <Link
                 to="/about"
@@ -159,11 +159,10 @@ export default function Footer() {
         <div className="border-t border-[#E1E5EA] py-6">
           <div className="flex flex-col items-center justify-between gap-4 md:flex-row">
             <p className="text-xs text-[#5A6472]">
-              © {currentYear} National Digital Platform for Research and Policy Innovation in Land Governance. 
-              Government of India initiative.
+              © {currentYear} National Digital Platform for Research and Policy Innovation in Land Governance.
             </p>
             <p className="text-xs text-[#5A6472]">
-              Last updated: September 2025 | Data reflects latest available government records
+              Research and policy information; verify source data before use.
             </p>
           </div>
         </div>

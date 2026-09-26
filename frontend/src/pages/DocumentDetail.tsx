@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { 
   ArrowLeft, 
@@ -7,7 +7,6 @@ import {
   Bookmark, 
   Download, 
   Share2, 
-  Eye, 
   Calendar,
   MapPin,
   User,
@@ -21,16 +20,46 @@ import {
   FileJson,
   AlertCircle,
   Loader2,
-  ExternalLink
+  ExternalLink,
+  Sparkles
 } from "lucide-react";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
-import { loadRepositoryDocumentById, loadRelatedDocuments, getDocumentPublicUrl } from "../lib/supabaseRepository";
+import {
+  loadRepositoryDocumentById,
+  loadRelatedDocuments,
+  loadRepositoryDocuments,
+  resolveDocumentFileUrl,
+  loadBookmarkedDocumentIds,
+  addDocumentBookmark,
+  removeDocumentBookmark,
+} from "../lib/supabaseRepository";
+import { askRepositoryAi, MAX_AI_CONTEXT_DOCUMENTS, type AiSupportingDocument } from "../lib/aiSearch";
+import { useAuth } from "../hooks/useAuth";
 import type { RepositoryDocument, ContentType } from "../types/repository";
 import Toast from "../components/ui/Toast";
+import AddToWorkspaceModal from "../components/repository/AddToWorkspaceModal";
+
+/** The AI analyses offered for a single repository document. */
+type DocumentAiAction = "summarize" | "related" | "compare" | "ask";
+
+const AI_ACTION_LABELS: Record<DocumentAiAction, string> = {
+  summarize: "Summarize this document",
+  related: "Find related research",
+  compare: "Compare with other documents",
+  ask: "Ask about this document",
+};
+
+/** One-click analyses shown beside the free-text question box. */
+const AI_QUICK_ACTIONS: { action: DocumentAiAction; label: string; icon: typeof FileText }[] = [
+  { action: "summarize", label: AI_ACTION_LABELS.summarize, icon: FileText },
+  { action: "related", label: AI_ACTION_LABELS.related, icon: BookOpen },
+  { action: "compare", label: AI_ACTION_LABELS.compare, icon: Brain },
+];
 
 export default function DocumentDetail() {
   const { id } = useParams<{ id: string }>();
+  const { user } = useAuth();
   
   const [document, setDocument] = useState<RepositoryDocument | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,9 +73,24 @@ export default function DocumentDetail() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState(false);
   const [documentUrl, setDocumentUrl] = useState<string | null>(null);
+  const [fileUnreachable, setFileUnreachable] = useState(false);
+  const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
+
+  // --- AI document analysis (Gemini, proxied through the backend) ---
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiActiveAction, setAiActiveAction] = useState("");
+  const [aiAnswer, setAiAnswer] = useState("");
+  const [aiDisclaimer, setAiDisclaimer] = useState("");
+  const [aiSupporting, setAiSupporting] = useState<AiSupportingDocument[]>([]);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiQuestion, setAiQuestion] = useState("");
+  const aiPanelRef = useRef<HTMLDivElement | null>(null);
+  const aiQuestionRef = useRef<HTMLInputElement | null>(null);
 
   // Load document from Supabase
   useEffect(() => {
+    let isCurrent = true;
+
     const loadDocument = async () => {
       if (!id) {
         setError("No document ID provided");
@@ -58,6 +102,7 @@ export default function DocumentDetail() {
       setError(null);
       setAccessDenied(false);
       setPdfError(false);
+      setFileUnreachable(false);
 
       const result = await loadRepositoryDocumentById(id);
 
@@ -72,8 +117,10 @@ export default function DocumentDetail() {
         setDocument(null);
       } else if (result.document) {
         setDocument(result.document);
-        // Get document URL
-        const url = getDocumentPublicUrl(result.document.filePath || null);
+        // Resolve the file URL: full government URLs pass through, private-bucket
+        // storage paths are signed (a public URL is refused for a private bucket).
+        const url = await resolveDocumentFileUrl(result.document.filePath || null);
+        if (!isCurrent) return;
         setDocumentUrl(url);
         // Set loading state for PDF
         if (url && result.document.mimeType === 'application/pdf') {
@@ -94,11 +141,54 @@ export default function DocumentDetail() {
         setDocument(null);
       }
 
-      setLoading(false);
+      if (isCurrent) {
+        setLoading(false);
+      }
     };
 
     loadDocument();
+
+    return () => {
+      isCurrent = false;
+    };
   }, [id]);
+
+  // An external PDF whose host is unreachable never fires the iframe's onLoad, which
+  // used to leave the "Loading document..." overlay spinning forever. Fail over to the
+  // existing error state (which offers "Open in new tab") once the load times out.
+  useEffect(() => {
+    if (!pdfLoading) return;
+
+    const timer = setTimeout(() => {
+      setPdfLoading(false);
+      setPdfError(true);
+      setFileUnreachable(true);
+    }, 15000);
+
+    return () => clearTimeout(timer);
+  }, [pdfLoading]);
+
+  // Load this document's saved (bookmarked) state for the signed-in user.
+  useEffect(() => {
+    let isCurrent = true;
+
+    if (!user || !id) {
+      setBookmarked(false);
+      return;
+    }
+
+    const loadBookmarkState = async () => {
+      const result = await loadBookmarkedDocumentIds(user.id);
+      if (!isCurrent || result.error) return;
+      setBookmarked(result.ids.includes(id));
+    };
+
+    loadBookmarkState();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [user, id]);
 
   // Get content type icon
   const getContentTypeIcon = (contentType: ContentType) => {
@@ -134,22 +224,47 @@ export default function DocumentDetail() {
     }
   };
 
-  // Bookmark handler
-  const toggleBookmark = () => {
-    setBookmarked(prev => !prev);
-    setToastMessage(bookmarked ? "Removed from saved items" : "Added to saved items");
+  // Bookmark handler — persists to public.document_bookmarks through Supabase
+  const toggleBookmark = async () => {
+    if (!user || !id) {
+      setToastMessage("Sign in to save documents to your account");
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+      return;
+    }
+
+    const wasSaved = bookmarked;
+
+    // Optimistic update; reverted if Supabase rejects the change (for example by RLS).
+    setBookmarked(!wasSaved);
+
+    const result = wasSaved
+      ? await removeDocumentBookmark(user.id, id)
+      : await addDocumentBookmark(user.id, id);
+
+    if (result.error) {
+      setBookmarked(wasSaved);
+      setToastMessage(result.error);
+    } else {
+      setToastMessage(wasSaved ? "Removed from saved documents" : "Added to saved documents");
+    }
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3000);
   };
 
-  // Download handler
+  // Download handler — only ever opens a real file URL (never a fabricated one).
   const handleDownload = () => {
-    if (documentUrl) {
+    if (!documentUrl) {
+      setToastMessage("Document file not available");
+    } else if (fileUnreachable) {
+      // The preview already timed out, so opening the URL would just hang in a new tab.
+      setToastMessage("The document source is not responding — the file may be unavailable");
+    } else if (document && document.accessTier !== "Public" && !user) {
+      setToastMessage("Sign in with an authorised account to download this document");
+    } else {
       // Open in new tab for download
       window.open(documentUrl, '_blank');
       setToastMessage("Opening document for download");
-    } else {
-      setToastMessage("Document file not available");
     }
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3000);
@@ -203,11 +318,86 @@ export default function DocumentDetail() {
     }, 3000);
   };
 
-  // AI action handler
-  const handleAIAction = (action: string) => {
-    setToastMessage(`AI Research Assistant will be connected during backend integration for: ${action}`);
-    setShowToast(true);
-    setTimeout(() => setShowToast(false), 3000);
+  // --- AI document analysis -------------------------------------------------
+  // Every AI control runs the same grounded flow: this document (plus, for the two
+  // comparative actions, real same-theme repository records) is sent to the backend as
+  // IDs, the server re-verifies those IDs against Supabase and asks Gemini. Nothing is
+  // fabricated — if the service is unavailable the panel shows the real error.
+
+  /** Real same-theme repository rows used as context for the comparative actions. */
+  const loadCompanionDocumentIds = async (source: RepositoryDocument): Promise<string[]> => {
+    const result = await loadRepositoryDocuments(
+      source.theme ? { themes: [source.theme] } : undefined,
+      undefined,
+      "Most Recent",
+      1,
+      MAX_AI_CONTEXT_DOCUMENTS
+    );
+    if (result.error) return [];
+    return result.documents
+      .filter((candidate) => candidate.id !== source.id)
+      .slice(0, MAX_AI_CONTEXT_DOCUMENTS - 1)
+      .map((candidate) => candidate.id);
+  };
+
+  /**
+   * Prompt text per action. The target document is named by TITLE rather than by position:
+   * PostgREST does not guarantee that rows come back in the order their IDs were requested,
+   * so telling Gemini that "[1] is this document" would not be reliable.
+   */
+  const buildAiPrompt = (action: DocumentAiAction, source: RepositoryDocument, question: string): string => {
+    const title = `"${source.title}"`;
+    switch (action) {
+      case "ask":
+        return question;
+      case "related":
+        return `The supplied repository records include the document titled ${title} alongside other documents. Identify which of the OTHER documents are most relevant when researching ${title}, and explain what they have in common. Refer to documents by their numbered markers.`;
+      case "compare":
+        return `Compare the document titled ${title} with the other supplied repository documents. Summarise the similarities and differences in theme, geographic coverage, and research focus. Refer to documents by their numbered markers.`;
+      case "summarize":
+      default:
+        return `Summarise the repository document titled ${title} for a land-governance researcher: its subject, geographic focus, and main points.`;
+    }
+  };
+
+  const runDocumentAi = async (action: DocumentAiAction, question: string = aiQuestion) => {
+    if (!document || aiLoading) return;
+
+    const trimmedQuestion = question.trim();
+    if (action === "ask" && !trimmedQuestion) {
+      setAiError("Type a question about this document, then choose Ask.");
+      aiQuestionRef.current?.focus();
+      return;
+    }
+
+    setAiError(null);
+    setAiAnswer("");
+    setAiDisclaimer("");
+    setAiSupporting([]);
+    setAiActiveAction(AI_ACTION_LABELS[action]);
+    setAiLoading(true);
+
+    try {
+      let documentIds = [document.id];
+      if (action === "related" || action === "compare") {
+        documentIds = [document.id, ...(await loadCompanionDocumentIds(document))];
+      }
+      const result = await askRepositoryAi(buildAiPrompt(action, document, trimmedQuestion), documentIds);
+      setAiAnswer(result.answer);
+      setAiDisclaimer(result.disclaimer);
+      setAiSupporting(result.supportingDocuments);
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "AI analysis is currently unavailable.");
+    } finally {
+      setAiLoading(false);
+      setAiActiveAction("");
+    }
+  };
+
+  /** Toolbar brain button: bring the AI panel into view and place the cursor in the question box. */
+  const focusAiPanel = () => {
+    aiPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    aiQuestionRef.current?.focus({ preventScroll: true });
   };
 
   // Loading state
@@ -345,6 +535,10 @@ export default function DocumentDetail() {
     );
   }
 
+  // Metadata access is enforced by Postgres RLS. File URLs come from a public storage
+  // bucket, so non-public documents only expose their file to signed-in users.
+  const fileAccessible = document.accessTier === "Public" || Boolean(user);
+
   return (
     <div className="flex min-h-screen flex-col bg-[#F5F7FA]">
       <Navbar />
@@ -440,9 +634,26 @@ export default function DocumentDetail() {
                   <Share2 className="h-5 w-5" />
                 </button>
                 <button
-                  onClick={() => handleAIAction("document analysis")}
+                  onClick={() => {
+                    if (!user) {
+                      setToastMessage("Sign in to add documents to a workspace");
+                      setShowToast(true);
+                      setTimeout(() => setShowToast(false), 3000);
+                      return;
+                    }
+                    setShowWorkspaceModal(true);
+                  }}
+                  className="p-2 rounded-md border border-[#E1E5EA] text-[#5A6472] hover:bg-[#F5F7FA]"
+                  title="Add to Workspace"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-folder-plus"><path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={focusAiPanel}
                   className="p-2 rounded-md border border-[#E1E5EA] text-[#5A6472] hover:bg-[#F5F7FA]"
                   title="Open in AI Research Assistant"
+                  aria-label="Open in AI Research Assistant"
                 >
                   <Brain className="h-5 w-5" />
                 </button>
@@ -455,30 +666,6 @@ export default function DocumentDetail() {
                 </Link>
               </div>
             </div>
-
-            {/* Stats - Only show if we have real data, otherwise hide */}
-            {(document.views || 0) > 0 || (document.downloads || 0) > 0 || (document.citations || 0) > 0 ? (
-              <div className="flex items-center gap-6 pt-4 mt-4 border-t border-[#E1E5EA] text-sm text-[#5A6472]">
-                {(document.views || 0) > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Eye className="h-4 w-4" />
-                    <span>{document.views} views</span>
-                  </div>
-                )}
-                {(document.downloads || 0) > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Download className="h-4 w-4" />
-                    <span>{document.downloads} downloads</span>
-                  </div>
-                )}
-                {(document.citations || 0) > 0 && (
-                  <div className="flex items-center gap-2">
-                    <BookOpen className="h-4 w-4" />
-                    <span>{document.citations} citations</span>
-                  </div>
-                )}
-              </div>
-            ) : null}
           </div>
 
           {/* Main Content Grid */}
@@ -497,7 +684,7 @@ export default function DocumentDetail() {
               <div className="bg-white rounded-lg border border-[#E1E5EA] p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-lg font-semibold text-[#1F2933]">Document Preview</h2>
-                  {documentUrl && document.mimeType === 'application/pdf' && (
+                  {documentUrl && fileAccessible && document.mimeType === 'application/pdf' && (
                     <a
                       href={documentUrl}
                       target="_blank"
@@ -511,7 +698,7 @@ export default function DocumentDetail() {
                 </div>
 
                 <div className="border border-[#E1E5EA] rounded-lg bg-[#F5F7FA]">
-                  {documentUrl && document.mimeType === 'application/pdf' ? (
+                  {documentUrl && fileAccessible && document.mimeType === 'application/pdf' ? (
                     /* PDF Viewer */
                     <div className="relative" style={{ height: '600px' }}>
                       {pdfLoading && (
@@ -551,7 +738,7 @@ export default function DocumentDetail() {
                         />
                       )}
                     </div>
-                  ) : documentUrl ? (
+                  ) : documentUrl && fileAccessible ? (
                     /* Non-PDF Document Preview */
                     <div className="aspect-[3/4] flex flex-col items-center justify-center p-8">
                       <FileText className="h-16 w-16 text-[#0B3D91]/30 mb-4" />
@@ -570,15 +757,37 @@ export default function DocumentDetail() {
                       </a>
                     </div>
                   ) : (
-                    /* No File Available */
+                    /* No File Available or Access Restricted */
                     <div className="aspect-[3/4] flex flex-col items-center justify-center p-8">
                       <FileText className="h-16 w-16 text-[#0B3D91]/30 mb-4" />
                       <p className="text-[#5A6472] text-center mb-2">{document.title}</p>
-                      <p className="text-xs text-[#5A6472]/70">Document file not available</p>
+                      <p className="text-xs text-[#5A6472]/70">
+                        {documentUrl
+                          ? "Sign in with an authorised account to access this document"
+                          : "Document file not available"}
+                      </p>
                     </div>
                   )}
                 </div>
               </div>
+
+              {/* Some government sites refuse to be embedded (X-Frame-Options: SAMEORIGIN), in
+                  which case the iframe stays blank without firing an error. Point the user at
+                  the new-tab action instead of leaving them stuck on a blank preview. */}
+              {documentUrl && fileAccessible && document.mimeType === 'application/pdf' && /^https?:\/\//i.test(documentUrl) && (
+                <p className="mt-3 text-xs text-[#5A6472]">
+                  Some government sites block embedding. If the preview stays blank, use{" "}
+                  <a
+                    href={documentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#0B3D91] underline hover:text-[#FF9933]"
+                  >
+                    open in a new tab
+                  </a>
+                  .
+                </p>
+              )}
 
               {/* Key Findings / Highlights */}
               <div className="bg-white rounded-lg border border-[#E1E5EA] p-6">
@@ -606,41 +815,131 @@ export default function DocumentDetail() {
               </div>
 
               {/* AI Action Panel */}
-              <div className="bg-gradient-to-r from-[#0B3D91]/5 to-[#FF9933]/5 rounded-lg border border-[#E1E5EA] p-6">
-                <div className="flex items-center gap-2 mb-4">
+              <div
+                ref={aiPanelRef}
+                className="scroll-mt-24 rounded-lg border border-[#E1E5EA] bg-gradient-to-r from-[#0B3D91]/5 to-[#FF9933]/5 p-6"
+              >
+                <div className="mb-1 flex items-center gap-2">
                   <Brain className="h-5 w-5 text-[#0B3D91]" />
                   <h2 className="text-lg font-semibold text-[#1F2933]">Explore with AI</h2>
                 </div>
-                <div className="grid sm:grid-cols-2 gap-3">
-                  <button
-                    onClick={() => handleAIAction("ask about this document")}
-                    className="flex items-center gap-2 p-3 rounded-md bg-white border border-[#E1E5EA] hover:border-[#0B3D91] text-left transition-colors"
-                  >
-                    <MessageSquare className="h-4 w-4 text-[#0B3D91]" />
-                    <span className="text-sm text-[#1F2933]">Ask about this document</span>
-                  </button>
-                  <button
-                    onClick={() => handleAIAction("summarize this document")}
-                    className="flex items-center gap-2 p-3 rounded-md bg-white border border-[#E1E5EA] hover:border-[#0B3D91] text-left transition-colors"
-                  >
-                    <FileText className="h-4 w-4 text-[#0B3D91]" />
-                    <span className="text-sm text-[#1F2933]">Summarize this document</span>
-                  </button>
-                  <button
-                    onClick={() => handleAIAction("find related research")}
-                    className="flex items-center gap-2 p-3 rounded-md bg-white border border-[#E1E5EA] hover:border-[#0B3D91] text-left transition-colors"
-                  >
-                    <BookOpen className="h-4 w-4 text-[#0B3D91]" />
-                    <span className="text-sm text-[#1F2933]">Find related research</span>
-                  </button>
-                  <button
-                    onClick={() => handleAIAction("compare with other documents")}
-                    className="flex items-center gap-2 p-3 rounded-md bg-white border border-[#E1E5EA] hover:border-[#0B3D91] text-left transition-colors"
-                  >
-                    <Brain className="h-4 w-4 text-[#0B3D91]" />
-                    <span className="text-sm text-[#1F2933]">Compare with other documents</span>
-                  </button>
+                <p className="mb-4 text-sm text-[#5A6472]">
+                  Ask a question about this document or run a prepared analysis. Answers are generated by Gemini from
+                  the repository record only.
+                </p>
+
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void runDocumentAi("ask");
+                  }}
+                >
+                  <label htmlFor="document-ai-question" className="mb-1.5 block text-sm font-medium text-[#344054]">
+                    Ask about this document
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      id="document-ai-question"
+                      ref={aiQuestionRef}
+                      type="text"
+                      value={aiQuestion}
+                      maxLength={1000}
+                      onChange={(event) => setAiQuestion(event.target.value)}
+                      placeholder="e.g. What tenure issues does this document raise?"
+                      className="min-h-11 min-w-0 flex-1 rounded-md border border-[#D0D5DD] bg-white px-3 py-2 text-sm text-[#1F2933] outline-none placeholder:text-[#98A2B3] focus:border-[#0B3D91] focus:ring-2 focus:ring-[#0B3D91]/20"
+                    />
+                    <button
+                      type="submit"
+                      disabled={aiLoading}
+                      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91] focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-70"
+                    >
+                      {aiLoading && aiActiveAction === AI_ACTION_LABELS.ask ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      Ask
+                    </button>
+                  </div>
+                </form>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  {AI_QUICK_ACTIONS.map(({ action, label, icon: ActionIcon }) => (
+                    <button
+                      key={action}
+                      type="button"
+                      onClick={() => void runDocumentAi(action)}
+                      disabled={aiLoading}
+                      className="flex items-center gap-2 rounded-md border border-[#E1E5EA] bg-white p-3 text-left transition-colors hover:border-[#0B3D91] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91] disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {aiLoading && aiActiveAction === label ? (
+                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#0B3D91]" aria-hidden="true" />
+                      ) : (
+                        <ActionIcon className="h-4 w-4 shrink-0 text-[#0B3D91]" aria-hidden="true" />
+                      )}
+                      <span className="text-sm text-[#1F2933]">{label}</span>
+                    </button>
+                  ))}
                 </div>
+
+                {aiLoading && (
+                  <div
+                    role="status"
+                    className="mt-4 flex items-center gap-3 rounded-md border border-[#D7E2F3] bg-white p-4 text-sm text-[#475467]"
+                  >
+                    <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[#0B3D91]" aria-hidden="true" />
+                    {aiActiveAction}: reviewing repository documents and generating a grounded answer...
+                  </div>
+                )}
+
+                {aiError && !aiLoading && (
+                  <p
+                    role="alert"
+                    className="mt-4 flex items-start gap-2 rounded-md border border-[#F1C6C3] bg-[#FFF7F6] p-4 text-sm text-[#9E2A22]"
+                  >
+                    <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                    <span>{aiError}</span>
+                  </p>
+                )}
+
+                {aiAnswer && !aiLoading && (
+                  <section
+                    aria-labelledby="document-ai-answer-heading"
+                    className="mt-4 rounded-md border border-[#D7E2F3] bg-white p-4 sm:p-5"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-5 w-5 text-[#0B3D91]" aria-hidden="true" />
+                      <h3 id="document-ai-answer-heading" className="text-base font-semibold text-[#1F2933]">
+                        AI Research Summary
+                      </h3>
+                    </div>
+                    <p className="mt-3 whitespace-pre-line text-sm leading-6 text-[#344054]">{aiAnswer}</p>
+                    <p className="mt-3 border-t border-[#D7E2F3] pt-3 text-xs text-[#667085]">{aiDisclaimer}</p>
+                    {aiSupporting.length > 0 && (
+                      <div className="mt-4 border-t border-[#D7E2F3] pt-4">
+                        <h4 className="mb-2 text-sm font-semibold text-[#1F2933]">Supporting Documents</h4>
+                        <ul className="space-y-2">
+                          {aiSupporting.map((supporting) => (
+                            <li
+                              key={supporting.id}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded border border-[#DCE2E8] px-3 py-2"
+                            >
+                              <Link
+                                to={`/repository/${supporting.id}`}
+                                className="min-w-0 text-sm font-medium text-[#0B3D91] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91]"
+                              >
+                                {supporting.title}
+                              </Link>
+                              <span className="text-xs text-[#667085]">
+                                {[supporting.contentType, supporting.state].filter(Boolean).join(" · ")}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </section>
+                )}
               </div>
 
               {/* Related Documents */}
@@ -720,10 +1019,6 @@ export default function DocumentDetail() {
                       {document.accessTier}
                     </span>
                   </div>
-                  <div className="flex justify-between items-start">
-                    <span className="text-sm text-[#5A6472]">Citations</span>
-                    <span className="text-sm text-[#1F2933] text-right">{document.citations}</span>
-                  </div>
                 </div>
               </div>
 
@@ -786,6 +1081,19 @@ export default function DocumentDetail() {
       </main>
 
       <Footer />
+
+      {showWorkspaceModal && document && (
+        <AddToWorkspaceModal
+          documentId={document.id}
+          onClose={() => setShowWorkspaceModal(false)}
+          onSuccess={() => {
+            setShowWorkspaceModal(false);
+            setToastMessage("Document added to workspace successfully");
+            setShowToast(true);
+            setTimeout(() => setShowToast(false), 3000);
+          }}
+        />
+      )}
 
       {/* Toast Notification */}
       {showToast && (

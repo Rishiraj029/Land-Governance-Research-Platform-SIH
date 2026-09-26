@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import { 
@@ -21,14 +21,38 @@ import {
   AlertTriangle,
   Shield,
   Database,
-  Globe
+  Globe,
+  Loader2,
+  RefreshCw
 } from "lucide-react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
-import { MOCK_GIS_FEATURES, GIS_LAYERS, GIS_CATEGORIES, GIS_THEMES, GIS_STATES, GIS_DISTRICTS, GIS_DATASETS, GIS_DATASET_INFO } from "../lib/mockGISData";
-import type { GISFeature, GISLayer, GISFilters } from "../types/gis";
+import { loadGisFeatures } from "../lib/supabaseGis";
+import type { GISFeature, GISLayer, GISFilters, GISDatasetInfo } from "../types/gis";
+
+/**
+ * Layer colours. Categories come from the database, so colours are assigned in the
+ * order the categories appear instead of being hardcoded per category name.
+ */
+const CATEGORY_PALETTE = [
+  "#138808",
+  "#FF9933",
+  "#D64545",
+  "#0B3D91",
+  "#E8A33D",
+  "#8B5CF6",
+  "#0E7490",
+  "#B45309",
+  "#0F766E",
+  "#7C3AED",
+];
+
+/** Stable id for a category, used as the layer id. */
+function categorySlug(category: string): string {
+  return category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
 
 // Fix for default Leaflet icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -39,8 +63,13 @@ L.Icon.Default.mergeOptions({
 });
 
 // Map control components
-function MapController({ selectedFeature, onReset }: { selectedFeature: GISFeature | null; onReset: () => void }) {
+function MapController({ selectedFeature, onReset, onReady }: { selectedFeature: GISFeature | null; onReset: () => void; onReady: (map: L.Map) => void }) {
   const map = useMap();
+
+  // Hand the map instance to the page so the details panel can zoom to a feature.
+  useEffect(() => {
+    onReady(map);
+  }, [map, onReady]);
 
   const handleZoomIn = () => map.zoomIn();
   const handleZoomOut = () => map.zoomOut();
@@ -92,11 +121,26 @@ function MapController({ selectedFeature, onReset }: { selectedFeature: GISFeatu
 export default function GISExplorer() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFeature, setSelectedFeature] = useState<GISFeature | null>(null);
-  const [layers, setLayers] = useState<GISLayer[]>(GIS_LAYERS);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [showMobileLegend, setShowMobileLegend] = useState(false);
   const [showMobilePanel, setShowMobilePanel] = useState(false);
-  
+
+  // Live data from public.gis_features
+  const [features, setFeatures] = useState<GISFeature[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [skippedNoCoordinates, setSkippedNoCoordinates] = useState(0);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Categories switched off in the Layers panel (empty = every layer shown)
+  const [hiddenCategories, setHiddenCategories] = useState<string[]>([]);
+
+  // Map instance, so "Zoom to feature" can move the map
+  const mapRef = useRef<L.Map | null>(null);
+  const handleMapReady = useCallback((map: L.Map) => {
+    mapRef.current = map;
+  }, []);
+
   // Filter state
   const [filters, setFilters] = useState<GISFilters>({
     state: "",
@@ -106,14 +150,105 @@ export default function GISExplorer() {
     dataset: ""
   });
 
-  // Toggle layer
+  // Load the live GIS rows from Supabase
+  useEffect(() => {
+    let isCurrent = true;
+
+    setIsLoading(true);
+    setLoadError(null);
+
+    loadGisFeatures().then(result => {
+      if (!isCurrent) return;
+
+      if (result.error) {
+        setLoadError(result.error);
+        setFeatures([]);
+      } else {
+        setFeatures(result.features);
+        setSkippedNoCoordinates(result.skippedNoCoordinates);
+      }
+
+      setIsLoading(false);
+    });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [reloadKey]);
+
+  // Filter options are derived from the live rows so they can never drift from the data.
+  const stateOptions = useMemo(
+    () => [...new Set(features.map(f => f.state))].sort((a, b) => a.localeCompare(b)),
+    [features]
+  );
+
+  // Districts are scoped to the selected state when one is chosen.
+  const districtOptions = useMemo(() => {
+    const scoped = filters.state ? features.filter(f => f.state === filters.state) : features;
+    return [...new Set(scoped.map(f => f.district).filter((d): d is string => Boolean(d)))]
+      .sort((a, b) => a.localeCompare(b));
+  }, [features, filters.state]);
+
+  const categoryOptions = useMemo(
+    () => [...new Set(features.map(f => f.category))].sort((a, b) => a.localeCompare(b)),
+    [features]
+  );
+
+  const themeOptions = useMemo(
+    () => [...new Set(features.map(f => f.theme))].sort((a, b) => a.localeCompare(b)),
+    [features]
+  );
+
+  const datasetOptions = useMemo(
+    () => [...new Set(features.map(f => f.datasetName).filter((d): d is string => Boolean(d)))]
+      .sort((a, b) => a.localeCompare(b)),
+    [features]
+  );
+
+  // Layers mirror the categories present in the data
+  const layers = useMemo<GISLayer[]>(() => (
+    categoryOptions.map((category, index) => ({
+      id: categorySlug(category),
+      name: category,
+      category,
+      color: CATEGORY_PALETTE[index % CATEGORY_PALETTE.length],
+      enabled: !hiddenCategories.includes(category),
+    }))
+  ), [categoryOptions, hiddenCategories]);
+
+  // Toggle a layer on/off (by category, since layers are derived from the data)
   const toggleLayer = (layerId: string) => {
-    setLayers(prev => prev.map(layer => 
-      layer.id === layerId ? { ...layer, enabled: !layer.enabled } : layer
-    ));
+    const layer = layers.find(l => l.id === layerId);
+    if (!layer) return;
+    setHiddenCategories(prev =>
+      prev.includes(layer.category)
+        ? prev.filter(c => c !== layer.category)
+        : [...prev, layer.category]
+    );
   };
 
-  // Clear filters
+  // Dataset summary for the bottom panel, derived from the loaded rows
+  const datasetInfo = useMemo<GISDatasetInfo>(() => {
+    const datasets = [...new Set(features.map(f => f.datasetName).filter((d): d is string => Boolean(d)))];
+    const states = new Set(features.map(f => f.state));
+    const districts = new Set(features.map(f => f.district).filter(Boolean));
+    const newest = features
+      .map(f => f.createdAt)
+      .filter((d): d is string => Boolean(d))
+      .sort()
+      .pop();
+
+    return {
+      name: datasets.length === 1 ? datasets[0] : `${datasets.length} datasets`,
+      description: "Spatial features read from the platform GIS table (public.gis_features).",
+      coverage: `${states.size} state${states.size === 1 ? "" : "s"}, ${districts.size} district${districts.size === 1 ? "" : "s"}`,
+      featureCount: features.length,
+      lastUpdated: newest || "",
+      source: datasets.length ? datasets.join(", ") : "Not specified in the dataset",
+    };
+  }, [features]);
+
+  // Clear filters — also restores every layer, so all available features come back
   const clearFilters = () => {
     setFilters({
       state: "",
@@ -123,24 +258,26 @@ export default function GISExplorer() {
       dataset: ""
     });
     setSearchQuery("");
+    setHiddenCategories([]);
   };
 
-  // Filter features
+  // Filter the live features by layer, search text and the selected filters
   const filteredFeatures = useMemo(() => {
-    return MOCK_GIS_FEATURES.filter(feature => {
+    return features.filter(feature => {
       // Layer filter
-      const layerEnabled = layers.find(l => l.category === feature.category)?.enabled;
-      if (!layerEnabled) return false;
+      if (hiddenCategories.includes(feature.category)) return false;
 
       // Search filter
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
-        const matchesSearch = 
+        const matchesSearch =
           feature.name.toLowerCase().includes(query) ||
           feature.state.toLowerCase().includes(query) ||
-          feature.district.toLowerCase().includes(query) ||
+          (feature.district || "").toLowerCase().includes(query) ||
           feature.category.toLowerCase().includes(query) ||
-          feature.theme.toLowerCase().includes(query);
+          feature.theme.toLowerCase().includes(query) ||
+          (feature.datasetName || "").toLowerCase().includes(query) ||
+          feature.description.toLowerCase().includes(query);
         if (!matchesSearch) return false;
       }
 
@@ -161,7 +298,7 @@ export default function GISExplorer() {
 
       return true;
     });
-  }, [searchQuery, filters, layers]);
+  }, [features, searchQuery, filters, hiddenCategories]);
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
@@ -210,13 +347,28 @@ export default function GISExplorer() {
     setSelectedFeature(null);
   };
 
+  // Move the map to a feature (used by the details panel button)
+  const zoomToFeature = (feature: GISFeature) => {
+    mapRef.current?.setView([feature.latitude, feature.longitude], 10);
+  };
+
   // Handle feature click
   const handleFeatureClick = (feature: GISFeature) => {
     setSelectedFeature(feature);
     setShowMobilePanel(true);
   };
 
-  const hasActiveFilters = searchQuery.trim() || filters.state || filters.district || filters.category || filters.theme || filters.dataset;
+  // Hidden layers count as active state too, so "Clear" is always available and can
+  // restore every feature in one click.
+  const hasActiveFilters = Boolean(
+    searchQuery.trim() ||
+    filters.state ||
+    filters.district ||
+    filters.category ||
+    filters.theme ||
+    filters.dataset ||
+    hiddenCategories.length
+  );
 
   return (
     <div className="flex min-h-screen flex-col bg-[#F5F7FA]">
@@ -335,11 +487,11 @@ export default function GISExplorer() {
                     <label className="block text-xs text-[#5A6472] mb-1">State</label>
                     <select
                       value={filters.state}
-                      onChange={(e) => setFilters({ ...filters, state: e.target.value })}
+                      onChange={(e) => setFilters({ ...filters, state: e.target.value, district: "" })}
                       className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                     >
                       <option value="">All States</option>
-                      {GIS_STATES.map(state => (
+                      {stateOptions.map(state => (
                         <option key={state} value={state}>{state}</option>
                       ))}
                     </select>
@@ -353,7 +505,7 @@ export default function GISExplorer() {
                       className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                     >
                       <option value="">All Districts</option>
-                      {GIS_DISTRICTS.map(district => (
+                      {districtOptions.map(district => (
                         <option key={district} value={district}>{district}</option>
                       ))}
                     </select>
@@ -367,7 +519,7 @@ export default function GISExplorer() {
                       className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                     >
                       <option value="">All Categories</option>
-                      {GIS_CATEGORIES.map(category => (
+                      {categoryOptions.map(category => (
                         <option key={category} value={category}>{category}</option>
                       ))}
                     </select>
@@ -381,7 +533,7 @@ export default function GISExplorer() {
                       className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                     >
                       <option value="">All Themes</option>
-                      {GIS_THEMES.map(theme => (
+                      {themeOptions.map(theme => (
                         <option key={theme} value={theme}>{theme}</option>
                       ))}
                     </select>
@@ -395,7 +547,7 @@ export default function GISExplorer() {
                       className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                     >
                       <option value="">All Datasets</option>
-                      {GIS_DATASETS.map(dataset => (
+                      {datasetOptions.map(dataset => (
                         <option key={dataset} value={dataset}>{dataset}</option>
                       ))}
                     </select>
@@ -469,11 +621,11 @@ export default function GISExplorer() {
                         <label className="block text-xs text-[#5A6472] mb-1">State</label>
                         <select
                           value={filters.state}
-                          onChange={(e) => setFilters({ ...filters, state: e.target.value })}
+                          onChange={(e) => setFilters({ ...filters, state: e.target.value, district: "" })}
                           className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                         >
                           <option value="">All States</option>
-                          {GIS_STATES.map(state => (
+                          {stateOptions.map(state => (
                             <option key={state} value={state}>{state}</option>
                           ))}
                         </select>
@@ -487,7 +639,7 @@ export default function GISExplorer() {
                           className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                         >
                           <option value="">All Districts</option>
-                          {GIS_DISTRICTS.map(district => (
+                          {districtOptions.map(district => (
                             <option key={district} value={district}>{district}</option>
                           ))}
                         </select>
@@ -501,8 +653,36 @@ export default function GISExplorer() {
                           className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
                         >
                           <option value="">All Categories</option>
-                          {GIS_CATEGORIES.map(category => (
+                          {categoryOptions.map(category => (
                             <option key={category} value={category}>{category}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-[#5A6472] mb-1">Theme</label>
+                        <select
+                          value={filters.theme}
+                          onChange={(e) => setFilters({ ...filters, theme: e.target.value })}
+                          className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
+                        >
+                          <option value="">All Themes</option>
+                          {themeOptions.map(theme => (
+                            <option key={theme} value={theme}>{theme}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-[#5A6472] mb-1">Dataset</label>
+                        <select
+                          value={filters.dataset}
+                          onChange={(e) => setFilters({ ...filters, dataset: e.target.value })}
+                          className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
+                        >
+                          <option value="">All Datasets</option>
+                          {datasetOptions.map(dataset => (
+                            <option key={dataset} value={dataset}>{dataset}</option>
                           ))}
                         </select>
                       </div>
@@ -524,21 +704,61 @@ export default function GISExplorer() {
 
           {/* Map Area */}
           <div className="flex-1 relative">
-            {filteredFeatures.length === 0 ? (
+            {isLoading ? (
+              /* Loading State */
+              <div className="absolute inset-0 flex items-center justify-center bg-[#F5F7FA]">
+                <div className="text-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-[#0B3D91] mx-auto mb-4" />
+                  <p className="text-[#5A6472]">Loading GIS features...</p>
+                </div>
+              </div>
+            ) : loadError ? (
+              /* Error State */
+              <div className="absolute inset-0 flex items-center justify-center bg-[#F5F7FA] p-4">
+                <div className="text-center bg-white rounded-lg border border-[#E1E5EA] p-8 max-w-md">
+                  <AlertCircle className="h-12 w-12 text-[#D64545] mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold text-[#1F2933] mb-2">Could not load GIS features</h3>
+                  <p className="text-[#5A6472] mb-6">{loadError}</p>
+                  <button
+                    onClick={() => setReloadKey(key => key + 1)}
+                    className="inline-flex items-center gap-2 rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63]"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Try again
+                  </button>
+                </div>
+              </div>
+            ) : filteredFeatures.length === 0 ? (
               /* Empty State */
               <div className="absolute inset-0 flex items-center justify-center bg-[#F5F7FA]">
                 <div className="text-center bg-white rounded-lg border border-[#E1E5EA] p-8 max-w-md">
                   <AlertCircle className="h-12 w-12 text-[#5A6472] mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold text-[#1F2933] mb-2">No geographic features match your current filters</h3>
+                  <h3 className="text-lg font-semibold text-[#1F2933] mb-2">
+                    {features.length === 0
+                      ? "No GIS features are available"
+                      : "No geographic features match your current filters"}
+                  </h3>
                   <p className="text-[#5A6472] mb-6">
-                    Try adjusting your search or filters to see map features
+                    {features.length === 0
+                      ? "The GIS dataset returned no records."
+                      : "Try adjusting your search or filters to see map features"}
                   </p>
-                  <button
-                    onClick={clearFilters}
-                    className="rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63]"
-                  >
-                    Clear filters
-                  </button>
+                  {features.length === 0 ? (
+                    <button
+                      onClick={() => setReloadKey(key => key + 1)}
+                      className="inline-flex items-center gap-2 rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63]"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      Try again
+                    </button>
+                  ) : (
+                    <button
+                      onClick={clearFilters}
+                      className="rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63]"
+                    >
+                      Clear filters
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
@@ -565,10 +785,14 @@ export default function GISExplorer() {
                     <Popup>
                       <div className="p-2 min-w-[200px]">
                         <h3 className="font-semibold text-[#1F2933] mb-2">{feature.name}</h3>
-                        <p className="text-sm text-[#5A6472] mb-2">{feature.description}</p>
-                        <div className="text-xs text-[#5A6472]">
-                          <p><strong>Location:</strong> {feature.district}, {feature.state}</p>
-                          <p><strong>Value:</strong> {feature.value} {feature.unit}</p>
+                        {feature.description && (
+                          <p className="text-sm text-[#5A6472] mb-2">{feature.description}</p>
+                        )}
+                        <div className="text-xs text-[#5A6472] space-y-1">
+                          <p><strong>Category:</strong> {feature.category}</p>
+                          <p><strong>Theme:</strong> {feature.theme}</p>
+                          <p><strong>Location:</strong> {[feature.district, feature.state].filter(Boolean).join(", ")}</p>
+                          <p><strong>Dataset:</strong> {feature.datasetName || "Not specified"}</p>
                         </div>
                       </div>
                     </Popup>
@@ -578,6 +802,7 @@ export default function GISExplorer() {
                 <MapController 
                   selectedFeature={selectedFeature}
                   onReset={resetSelection}
+                  onReady={handleMapReady}
                 />
               </MapContainer>
             )}
@@ -636,35 +861,37 @@ export default function GISExplorer() {
                 <div className="space-y-3">
                   <div>
                     <p className="text-xs text-[#5A6472]">Location</p>
-                    <p className="text-sm text-[#1F2933]">{selectedFeature.district}, {selectedFeature.state}</p>
+                    <p className="text-sm text-[#1F2933]">{[selectedFeature.district, selectedFeature.state].filter(Boolean).join(", ")}</p>
                   </div>
                   <div>
                     <p className="text-xs text-[#5A6472]">Theme</p>
                     <p className="text-sm text-[#1F2933]">{selectedFeature.theme}</p>
                   </div>
+                  {selectedFeature.description && (
+                    <div>
+                      <p className="text-xs text-[#5A6472]">Description</p>
+                      <p className="text-sm text-[#5A6472]">{selectedFeature.description}</p>
+                    </div>
+                  )}
                   <div>
-                    <p className="text-xs text-[#5A6472]">Value</p>
-                    <p className="text-sm text-[#1F2933]">{selectedFeature.value} {selectedFeature.unit}</p>
+                    <p className="text-xs text-[#5A6472]">Dataset / source</p>
+                    <p className="text-sm text-[#1F2933]">{selectedFeature.datasetName || "Not specified"}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-[#5A6472]">Description</p>
-                    <p className="text-sm text-[#5A6472]">{selectedFeature.description}</p>
+                    <p className="text-xs text-[#5A6472]">Coordinates</p>
+                    <p className="text-sm text-[#1F2933]">{selectedFeature.latitude.toFixed(4)}, {selectedFeature.longitude.toFixed(4)}</p>
                   </div>
-                  <div>
-                    <p className="text-xs text-[#5A6472]">Dataset</p>
-                    <p className="text-sm text-[#1F2933]">{selectedFeature.datasetName}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-[#5A6472]">Last Updated</p>
-                    <p className="text-sm text-[#1F2933]">{new Date(selectedFeature.lastUpdated).toLocaleDateString()}</p>
-                  </div>
+                  {selectedFeature.createdAt && (
+                    <div>
+                      <p className="text-xs text-[#5A6472]">Record added</p>
+                      <p className="text-sm text-[#1F2933]">{new Date(selectedFeature.createdAt).toLocaleDateString()}</p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="pt-4 border-t border-[#E1E5EA]">
                   <button
-                    onClick={() => {
-                      // Zoom to feature functionality
-                    }}
+                    onClick={() => zoomToFeature(selectedFeature)}
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-[#0B3D91] text-white text-sm font-medium hover:bg-[#062A63]"
                   >
                     <Maximize2 className="h-4 w-4" />
@@ -704,11 +931,11 @@ export default function GISExplorer() {
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
                       <p className="text-xs text-[#5A6472]">Location</p>
-                      <p className="text-[#1F2933]">{selectedFeature.district}</p>
+                      <p className="text-[#1F2933]">{[selectedFeature.district, selectedFeature.state].filter(Boolean).join(", ")}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-[#5A6472]">Value</p>
-                      <p className="text-[#1F2933]">{selectedFeature.value} {selectedFeature.unit}</p>
+                      <p className="text-xs text-[#5A6472]">Theme</p>
+                      <p className="text-[#1F2933]">{selectedFeature.theme}</p>
                     </div>
                   </div>
                 </div>
@@ -756,20 +983,37 @@ export default function GISExplorer() {
                 <div className="space-y-2">
                   <div>
                     <p className="text-xs text-[#5A6472]">Dataset name</p>
-                    <p className="text-sm text-[#1F2933]">{GIS_DATASET_INFO.name}</p>
+                    <p className="text-sm text-[#1F2933]">{datasetInfo.name}</p>
                   </div>
                   <div>
                     <p className="text-xs text-[#5A6472]">Description</p>
-                    <p className="text-sm text-[#5A6472]">{GIS_DATASET_INFO.description}</p>
+                    <p className="text-sm text-[#5A6472]">{datasetInfo.description}</p>
                   </div>
                   <div>
                     <p className="text-xs text-[#5A6472]">Coverage</p>
-                    <p className="text-sm text-[#1F2933]">{GIS_DATASET_INFO.coverage}</p>
+                    <p className="text-sm text-[#1F2933]">{datasetInfo.coverage}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-[#5A6472]">Source</p>
-                    <p className="text-sm text-[#E8A33D]">{GIS_DATASET_INFO.source}</p>
+                    <p className="text-xs text-[#5A6472]">Features loaded</p>
+                    <p className="text-sm text-[#1F2933]">{datasetInfo.featureCount}</p>
                   </div>
+                  <div>
+                    <p className="text-xs text-[#5A6472]">Source (dataset_name)</p>
+                    <p className="text-sm text-[#E8A33D]">{datasetInfo.source}</p>
+                  </div>
+                  {skippedNoCoordinates > 0 && (
+                    <div>
+                      <p className="text-xs text-[#5A6472]">Not mappable</p>
+                      <p className="text-sm text-[#E8A33D]">
+                        {skippedNoCoordinates} record{skippedNoCoordinates === 1 ? "" : "s"} skipped (no usable coordinates)
+                      </p>
+                    </div>
+                  )}
+                  <p className="text-xs text-[#5A6472] pt-2 border-t border-[#E1E5EA]">
+                    Records are labelled by the dataset name stored with them. Where a dataset is
+                    marked illustrative or demo, treat it as a prototype input rather than official
+                    government measurement.
+                  </p>
                 </div>
               </div>
 

@@ -1,292 +1,220 @@
-import { useState, useEffect } from 'react';
-import Navbar from "../components/layout/Navbar";
-import Footer from "../components/layout/Footer";
-import { Link } from "react-router-dom";
-import { ChevronRight, Save, RotateCcw, Play, Loader2, Beaker } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { BarChart3, BookOpen, Clock3, FileText, Info, Map, Play, Save, Scale, SlidersHorizontal } from 'lucide-react';
+import Footer from '../components/layout/Footer';
+import Navbar from '../components/layout/Navbar';
+import Toast from '../components/ui/Toast';
+import { useAuth } from '../hooks/useAuth';
+import { formatSimulationValue, runSimulation, SIMULATION_SCENARIOS, validateParameters } from '../lib/simulationEngine';
+import { loadSimulationRuns, saveSimulationRun } from '../lib/supabaseSimulation';
+import type { SimulationParameters, SimulationResult, SimulationRun, SimulationScenario, SimulationScenarioId } from '../types/simulation';
 
-import { scenarios } from '../lib/mockSimulationData';
-import type { SimulationResult, SavedScenario } from '../types/simulation';
+type ToastState = { message: string; type: 'success' | 'error' } | null;
 
-import ScenarioSelector from '../components/simulation/ScenarioSelector';
-import ParameterPanel from '../components/simulation/ParameterPanel';
-import SimulationResults from '../components/simulation/SimulationResults';
-import ProjectionChart from '../components/simulation/ProjectionChart';
-import ScenarioComparison from '../components/simulation/ScenarioComparison';
-import MethodologyCard from '../components/simulation/MethodologyCard';
+const scenarioIcons: Record<SimulationScenarioId, typeof FileText> = {
+  'land-record-digitization': FileText,
+  'property-mapping-coverage': Map,
+  'land-dispute-reduction': Scale,
+  'land-record-processing-efficiency': Clock3,
+};
+
+function toInputValues(parameters: SimulationParameters): Record<string, string> {
+  return Object.fromEntries(Object.entries(parameters).map(([key, value]) => [key, String(value)]));
+}
+
+function formatRunDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Date unavailable' : date.toLocaleString();
+}
 
 export default function SimulationLab() {
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
-  const [parameterValues, setParameterValues] = useState<Record<string, any>>({});
+  const { user } = useAuth();
+  const [selectedScenarioId, setSelectedScenarioId] = useState<SimulationScenarioId | null>(null);
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   const [result, setResult] = useState<SimulationResult | null>(null);
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>([]);
+  const [runs, setRuns] = useState<SimulationRun[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [toast, setToast] = useState<ToastState>(null);
 
-  // Find the selected scenario object
-  const selectedScenario = scenarios.find(s => s.id === selectedScenarioId) || null;
+  const selectedScenario = useMemo(
+    () => SIMULATION_SCENARIOS.find((scenario) => scenario.id === selectedScenarioId) ?? null,
+    [selectedScenarioId],
+  );
 
-  // Update parameter defaults when scenario changes
-  useEffect(() => {
-    if (selectedScenario) {
-      const defaults: Record<string, any> = {};
-      selectedScenario.parameters.forEach(p => {
-        defaults[p.id] = p.defaultValue;
-      });
-      setParameterValues(defaults);
-      setResult(null); // Clear previous results
+  const loadRuns = async (userId: string) => {
+    setRunsLoading(true);
+    setRunsError(null);
+    try {
+      const { runs: savedRuns, error } = await loadSimulationRuns(userId);
+      if (error) {
+        setRunsError(error);
+        return;
+      }
+      setRuns(savedRuns);
+    } catch (error) {
+      setRunsError(error instanceof Error ? error.message : 'Unable to load saved simulations.');
+    } finally {
+      setRunsLoading(false);
     }
-  }, [selectedScenarioId]);
-
-  const handleSelectScenario = (id: string) => {
-    setSelectedScenarioId(id);
   };
 
-  const handleParameterChange = (id: string, value: any) => {
-    setParameterValues(prev => ({ ...prev, [id]: value }));
+  useEffect(() => {
+    if (!user) {
+      const timer = window.setTimeout(() => {
+        setRuns([]);
+        setRunsError(null);
+        setRunsLoading(false);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    void loadRuns(user.id);
+  }, [user]);
+
+  const selectScenario = (scenario: SimulationScenario) => {
+    setSelectedScenarioId(scenario.id);
+    setInputValues({});
+    setValidationErrors({});
+    setResult(null);
+  };
+
+  const updateInput = (parameterId: string, value: string) => {
+    setInputValues((current) => ({ ...current, [parameterId]: value }));
+    setValidationErrors((current) => {
+      const { [parameterId]: discardedError, ...remainingErrors } = current;
+      void discardedError;
+      return remainingErrors;
+    });
   };
 
   const handleRunSimulation = () => {
-    if (!selectedScenario) return;
-    
-    setIsSimulating(true);
-    
-    // Fake loading delay for better UX
-    setTimeout(() => {
-      const simResult = selectedScenario.calculate(parameterValues, selectedScenario.baselineValue);
-      setResult(simResult);
-      setIsSimulating(false);
-    }, 800);
+    if (!selectedScenario) {
+      setToast({ message: 'Choose a scenario before running a simulation.', type: 'error' });
+      return;
+    }
+    const validation = validateParameters(selectedScenario, inputValues);
+    if (validation.parameters === null) {
+      setValidationErrors(validation.errors);
+      setResult(null);
+      return;
+    }
+    setResult(runSimulation(selectedScenario, validation.parameters));
+    setValidationErrors({});
   };
 
-  const handleSaveScenario = () => {
+  const handleSaveSimulation = async () => {
     if (!selectedScenario || !result) return;
-    
-    const scenarioName = `${selectedScenario.title} - ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
-    
-    const newSaved: SavedScenario = {
-      id: Math.random().toString(36).substring(7),
-      name: scenarioName,
-      scenarioId: selectedScenario.id,
-      scenarioTitle: selectedScenario.title,
-      parameters: { ...parameterValues },
-      result: { ...result },
-      timestamp: Date.now()
-    };
-    
-    setSavedScenarios(prev => [...prev, newSaved]);
+    if (!user) {
+      setToast({ message: 'Please sign in to save a simulation and view previous runs.', type: 'error' });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const { run: savedRun, error } = await saveSimulationRun(user.id, selectedScenario.title, result.assumptions, result);
+      if (error || !savedRun) throw new Error(error ?? 'Unable to save this simulation.');
+      setRuns((current) => [savedRun, ...current]);
+      setToast({ message: 'Simulation saved successfully.', type: 'success' });
+    } catch (error) {
+      setToast({ message: error instanceof Error ? error.message : 'Unable to save this simulation.', type: 'error' });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleRemoveScenario = (id: string) => {
-    setSavedScenarios(prev => prev.filter(s => s.id !== id));
+  const openSavedRun = (run: SimulationRun) => {
+    const scenario = SIMULATION_SCENARIOS.find((item) => item.title === run.scenarioName)
+      ?? SIMULATION_SCENARIOS.find((item) => item.id === run.results.scenarioId);
+    if (!scenario) {
+      setToast({ message: 'This saved simulation uses an unavailable scenario.', type: 'error' });
+      return;
+    }
+    setSelectedScenarioId(scenario.id);
+    setInputValues(toInputValues(run.parameters));
+    setValidationErrors({});
+    setResult(run.results);
+    setToast({ message: 'Saved simulation opened.', type: 'success' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleReset = () => {
+  const resetSimulation = () => {
     setSelectedScenarioId(null);
-    setParameterValues({});
+    setInputValues({});
+    setValidationErrors({});
     setResult(null);
-    // Note: We don't clear saved scenarios on general reset
-  };
-
-  const handleExport = () => {
-    if (savedScenarios.length === 0) return;
-
-    // Build CSV content
-    const headers = ['Scenario Name', 'Policy Type', 'Baseline', 'Projected', 'Change (%)', 'Implementation Period (Yrs)'];
-    const rows = savedScenarios.map(s => [
-      `"${s.name}"`,
-      `"${s.scenarioTitle}"`,
-      s.result.baseline,
-      s.result.projected,
-      s.result.changePercentage.toFixed(2),
-      s.result.implementationPeriod
-    ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(e => e.join(','))
-    ].join('\n');
-
-    // Create a blob and trigger download
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'simulation_scenarios_export.csv');
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#F5F7FA]">
+    <div className="flex min-h-screen flex-col bg-[#F5F7FA] text-[#1F2933]">
       <Navbar />
-      
-      {/* Page Header */}
-      <div className="bg-[#0B3D91] text-white py-12 px-4 sm:px-6 lg:px-8 shadow-inner">
-        <div className="max-w-7xl mx-auto">
-          {/* Breadcrumb */}
-          <nav className="flex text-sm text-blue-200 mb-6" aria-label="Breadcrumb">
-            <ol className="flex items-center space-x-2">
-              <li>
-                <Link to="/" className="hover:text-white transition-colors">Home</Link>
-              </li>
-              <li>
-                <ChevronRight className="h-4 w-4" />
-              </li>
-              <li className="text-white font-medium" aria-current="page">
-                Simulation Lab
-              </li>
-            </ol>
-          </nav>
-
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div>
-              <div className="flex items-center space-x-3 mb-2">
-                <h1 className="text-3xl font-bold font-poppins">Policy Simulation Lab</h1>
-                <span className="bg-saffron text-white text-xs font-bold px-2 py-1 rounded shadow-sm bg-[#FF9933]">
-                  Prototype
-                </span>
+      <main className="flex-1">
+        <section className="border-b border-[#D9E0E8] bg-white">
+          <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+            <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
+              <div>
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[#0B3D91]"><BarChart3 className="h-4 w-4" aria-hidden="true" />Research and policy experimentation</div>
+                <h1 className="font-poppins text-3xl font-bold text-[#062A63] sm:text-4xl">Policy Simulation Lab</h1>
+                <p className="mt-3 max-w-3xl text-base leading-7 text-[#52606D]">Explore hypothetical land-governance scenarios using transparent, user-defined assumptions.</p>
               </div>
-              <p className="text-lg text-blue-100 max-w-3xl">
-                Experiment with land governance policy scenarios and examine their projected outcomes.
-              </p>
-              <div className="mt-4 inline-flex items-center space-x-2 bg-blue-800/50 rounded p-2.5 border border-blue-700/50">
-                <div className="h-2 w-2 rounded-full bg-amber-400"></div>
-                <p className="text-sm text-blue-100">
-                  <span className="font-semibold text-white">Note:</span> Results shown here are illustrative prototype calculations and are not official government forecasts.
-                </p>
-              </div>
+              <button type="button" onClick={resetSimulation} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-[#B8C6D9] bg-white px-4 py-2.5 text-sm font-semibold text-[#0B3D91] transition-colors hover:bg-[#F0F5FC] focus:outline-none focus:ring-2 focus:ring-[#0B3D91] focus:ring-offset-2"><SlidersHorizontal className="h-4 w-4" aria-hidden="true" />Reset simulation</button>
             </div>
-            
-            <div className="flex shrink-0">
-              <button 
-                onClick={handleReset}
-                className="flex items-center space-x-2 text-sm font-medium text-white border border-blue-400/30 bg-blue-800/30 hover:bg-blue-700/50 px-4 py-2 rounded-md transition-colors"
-              >
-                <RotateCcw className="h-4 w-4" />
-                <span>Reset Simulation</span>
-              </button>
+            <div className="mt-6 flex gap-3 rounded-lg border border-[#B9CCE9] bg-[#F0F5FC] p-4 text-sm leading-6 text-[#244C82]"><Info className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" /><p>Simulation results are scenario estimates based on the assumptions entered by the user. They are not official government forecasts.</p></div>
+          </div>
+        </section>
+
+        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+          <section aria-labelledby="scenario-heading">
+            <div className="mb-4"><h2 id="scenario-heading" className="font-poppins text-xl font-semibold text-[#062A63]">Select a scenario</h2><p className="mt-1 text-sm text-[#5A6472]">Choose a scenario, then enter your own assumptions.</p></div>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {SIMULATION_SCENARIOS.map((scenario) => {
+                const Icon = scenarioIcons[scenario.id];
+                const isSelected = selectedScenarioId === scenario.id;
+                return <button key={scenario.id} type="button" aria-pressed={isSelected} onClick={() => selectScenario(scenario)} className={`min-h-40 rounded-lg border p-5 text-left shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-[#0B3D91] focus:ring-offset-2 ${isSelected ? 'border-[#0B3D91] bg-[#F0F5FC] ring-1 ring-[#0B3D91]' : 'border-[#D9E0E8] bg-white hover:border-[#8EACC9] hover:bg-[#FAFBFC]'}`}>
+                  <span className="mb-4 inline-flex rounded-md bg-[#E8F0FB] p-2 text-[#0B3D91]"><Icon className="h-5 w-5" aria-hidden="true" /></span><span className="block font-poppins text-base font-semibold text-[#1F2933]">{scenario.title}</span><span className="mt-2 block text-sm leading-5 text-[#5A6472]">{scenario.description}</span>
+                </button>;
+              })}
             </div>
-          </div>
-        </div>
-      </div>
+          </section>
 
-      {/* Main Content */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        
-        <div className="flex flex-col lg:flex-row gap-8">
-          
-          {/* Left Column: Controls */}
-          <div className="w-full lg:w-1/3 flex flex-col gap-6">
-            <ScenarioSelector 
-              scenarios={scenarios}
-              selectedId={selectedScenarioId}
-              onSelect={handleSelectScenario}
-            />
-
-            {selectedScenario && (
-              <>
-                <ParameterPanel 
-                  scenario={selectedScenario}
-                  values={parameterValues}
-                  onChange={handleParameterChange}
-                />
-
-                <div className="bg-white rounded-lg shadow-sm border border-[#E1E5EA] p-6">
-                  <button
-                    onClick={handleRunSimulation}
-                    disabled={isSimulating}
-                    className="w-full flex items-center justify-center space-x-2 bg-[#0B3D91] hover:bg-[#062A63] text-white px-6 py-4 rounded-md font-semibold text-lg transition-colors disabled:opacity-70 disabled:cursor-not-allowed shadow-sm"
-                  >
-                    {isSimulating ? (
-                      <>
-                        <Loader2 className="h-6 w-6 animate-spin" />
-                        <span>Running prototype simulation...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play className="h-6 w-6" />
-                        <span>Run Simulation</span>
-                      </>
-                    )}
-                  </button>
-                  <p className="text-center text-sm text-[#5A6472] mt-3">
-                    {result ? "Simulation completed." : "Configure parameters and run the simulation."}
-                  </p>
+          <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <section className="rounded-lg border border-[#D9E0E8] bg-white p-5 shadow-sm sm:p-6" aria-labelledby="parameters-heading">
+              <h2 id="parameters-heading" className="font-poppins text-xl font-semibold text-[#062A63]">Parameters</h2>
+              {!selectedScenario ? <div className="mt-6 rounded-md border border-dashed border-[#C8D3E0] bg-[#FAFBFC] p-8 text-center text-sm text-[#5A6472]">Select a scenario to enter assumptions. No external or government dataset is used.</div> : <>
+                <p className="mt-2 text-sm leading-6 text-[#5A6472]">All values below are user-provided assumptions. Fields are intentionally blank until you enter them.</p>
+                <div className="mt-6 space-y-5">
+                  {selectedScenario.parameters.map((parameter) => <div key={parameter.id}>
+                    <label htmlFor={parameter.id} className="block text-sm font-semibold text-[#334E68]">{parameter.label} <span className="font-normal text-[#5A6472]">({parameter.unit})</span></label>
+                    <p id={`${parameter.id}-description`} className="mt-1 text-xs leading-5 text-[#6B7280]">{parameter.description}</p>
+                    <input id={parameter.id} type="number" inputMode="decimal" min={parameter.min} max={parameter.max} step="any" value={inputValues[parameter.id] ?? ''} onChange={(event) => updateInput(parameter.id, event.target.value)} aria-describedby={`${parameter.id}-description${validationErrors[parameter.id] ? ` ${parameter.id}-error` : ''}`} aria-invalid={Boolean(validationErrors[parameter.id])} className={`mt-2 w-full rounded-md border bg-white px-3 py-2.5 text-sm text-[#1F2933] outline-none transition focus:ring-2 focus:ring-[#0B3D91] ${validationErrors[parameter.id] ? 'border-red-600 focus:border-red-600 focus:ring-red-200' : 'border-[#B8C6D9] focus:border-[#0B3D91]'}`} />
+                    {validationErrors[parameter.id] && <p id={`${parameter.id}-error`} role="alert" className="mt-1.5 text-sm text-red-700">{validationErrors[parameter.id]}</p>}
+                  </div>)}
                 </div>
-              </>
-            )}
+                <button type="button" onClick={handleRunSimulation} className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0B3D91] px-5 py-3 text-base font-semibold text-white transition-colors hover:bg-[#062A63] focus:outline-none focus:ring-2 focus:ring-[#0B3D91] focus:ring-offset-2"><Play className="h-5 w-5" aria-hidden="true" />Run Simulation</button>
+              </>}
+            </section>
+
+            <section className="rounded-lg border border-[#D9E0E8] bg-white p-5 shadow-sm sm:p-6" aria-labelledby="results-heading">
+              <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 id="results-heading" className="font-poppins text-xl font-semibold text-[#062A63]">Scenario Result</h2><p className="mt-1 text-sm text-[#5A6472]">Calculated only from the assumptions you enter.</p></div>{result && <button type="button" onClick={handleSaveSimulation} disabled={isSaving} className="inline-flex items-center gap-2 rounded-md bg-[#138808] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#0E6806] focus:outline-none focus:ring-2 focus:ring-[#138808] focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-70"><Save className="h-4 w-4" aria-hidden="true" />{isSaving ? 'Saving…' : 'Save Simulation'}</button>}</div>
+              {!result ? <div className="mt-6 flex min-h-72 flex-col items-center justify-center rounded-md border border-dashed border-[#C8D3E0] bg-[#FAFBFC] px-6 text-center"><BarChart3 className="h-9 w-9 text-[#8EACC9]" aria-hidden="true" /><h3 className="mt-4 font-poppins text-lg font-semibold text-[#334E68]">No result yet</h3><p className="mt-2 max-w-md text-sm leading-6 text-[#5A6472]">Select a scenario, enter valid assumptions, and run the simulation to view a transparent scenario estimate.</p></div> : <div className="mt-6">
+                <div className="rounded-md border border-[#B9CCE9] bg-[#F0F5FC] px-4 py-3 text-sm font-medium text-[#244C82]">{result.keyResult}</div>
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">{result.outcomes.map((outcome) => <article key={outcome.label} className="rounded-md border border-[#E1E5EA] bg-white p-4"><p className="text-sm font-medium text-[#52606D]">{outcome.label}</p><p className="mt-2 font-poppins text-2xl font-semibold text-[#062A63]">{formatSimulationValue(outcome.value)} {outcome.unit}</p>{outcome.detail && <p className="mt-2 text-xs leading-5 text-[#5A6472]">{outcome.detail}</p>}</article>)}</div>
+                <details className="mt-6 rounded-md border border-[#D9E0E8] bg-[#FAFBFC] p-4" open><summary className="cursor-pointer font-poppins text-base font-semibold text-[#062A63] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]">Methodology &amp; Assumptions</summary><div className="mt-4 space-y-5 text-sm leading-6 text-[#52606D]">
+                  <div><h3 className="font-semibold text-[#334E68]">Inputs used</h3><dl className="mt-2 grid gap-x-5 gap-y-1 sm:grid-cols-2">{selectedScenario?.parameters.map((parameter) => <div key={parameter.id} className="flex justify-between gap-3 border-b border-[#E6EBF0] py-1.5"><dt>{parameter.label}</dt><dd className="font-medium text-[#334E68]">{formatSimulationValue(result.assumptions[parameter.id])} {parameter.unit}</dd></div>)}</dl></div>
+                  <div><h3 className="font-semibold text-[#334E68]">Formulas applied</h3><ul className="mt-2 list-disc space-y-1 pl-5">{result.methodology.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                  <div><h3 className="font-semibold text-[#334E68]">Limitations</h3><ul className="mt-2 list-disc space-y-1 pl-5">{result.limitations.map((item) => <li key={item}>{item}</li>)}</ul></div>
+                </div></details>
+              </div>}
+            </section>
           </div>
 
-          {/* Right Column: Results */}
-          <div className="w-full lg:w-2/3 flex flex-col gap-6">
-            {!selectedScenario && (
-              <div className="bg-white rounded-lg shadow-sm border border-[#E1E5EA] p-12 flex flex-col items-center justify-center text-center h-full min-h-[400px]">
-                <div className="bg-blue-50 p-4 rounded-full mb-4">
-                  <Beaker className="h-10 w-10 text-[#0B3D91]" />
-                </div>
-                <h3 className="text-xl font-semibold text-[#1F2933] mb-2">Configure a policy scenario to begin</h3>
-                <p className="text-[#5A6472] max-w-md">
-                  Select a policy scenario from the left panel and adjust its parameters to view illustrative projections.
-                </p>
-              </div>
-            )}
-
-            {selectedScenario && result && !isSimulating && (
-              <>
-                <SimulationResults 
-                  scenario={selectedScenario}
-                  result={result}
-                />
-                
-                <ProjectionChart 
-                  scenario={selectedScenario}
-                  result={result}
-                />
-
-                <div className="flex justify-end mb-2">
-                  <button
-                    onClick={handleSaveScenario}
-                    className="flex items-center space-x-2 bg-white border border-[#E1E5EA] hover:bg-gray-50 text-[#0B3D91] font-medium px-4 py-2 rounded-md transition-colors shadow-sm"
-                  >
-                    <Save className="h-4 w-4" />
-                    <span>Save Scenario</span>
-                  </button>
-                </div>
-              </>
-            )}
-            
-            {/* Show a placeholder if a scenario is selected but not yet run */}
-            {selectedScenario && !result && !isSimulating && (
-               <div className="bg-white rounded-lg shadow-sm border border-dashed border-[#CBD5E1] p-12 flex flex-col items-center justify-center text-center">
-                  <div className="bg-gray-50 p-4 rounded-full mb-4">
-                    <Play className="h-8 w-8 text-[#94A3B8]" />
-                  </div>
-                  <h3 className="text-lg font-medium text-[#1F2933] mb-1">Ready to Simulate</h3>
-                  <p className="text-[#5A6472]">
-                    Adjust your parameters and click "Run Simulation" to see the projected outcomes.
-                  </p>
-               </div>
-            )}
-
-            {/* Scenario Comparison Table */}
-            {savedScenarios.length > 0 && (
-              <div className="mt-8">
-                <ScenarioComparison 
-                  scenarios={savedScenarios}
-                  onRemove={handleRemoveScenario}
-                  onExport={handleExport}
-                />
-              </div>
-            )}
-            
-            <MethodologyCard />
-          </div>
-
+          <section className="mt-8 rounded-lg border border-[#D9E0E8] bg-white p-5 shadow-sm sm:p-6" aria-labelledby="previous-heading">
+            <div className="flex items-center gap-3"><span className="rounded-md bg-[#E8F0FB] p-2 text-[#0B3D91]"><BookOpen className="h-5 w-5" aria-hidden="true" /></span><div><h2 id="previous-heading" className="font-poppins text-xl font-semibold text-[#062A63]">Previous Simulations</h2><p className="mt-1 text-sm text-[#5A6472]">Saved simulations are private to the account that created them.</p></div></div>
+            {!user ? <div className="mt-5 rounded-md border border-[#D9E0E8] bg-[#FAFBFC] p-5 text-sm leading-6 text-[#52606D]">Sign in to save simulations and view previous simulations. You can still run scenario estimates locally.</div> : runsLoading ? <div className="mt-5 rounded-md border border-[#D9E0E8] bg-[#FAFBFC] p-5 text-sm text-[#52606D]">Loading saved simulations…</div> : runsError ? <div className="mt-5 rounded-md border border-red-200 bg-red-50 p-5 text-sm text-red-800" role="alert"><p>{runsError}</p><button type="button" onClick={() => void loadRuns(user.id)} className="mt-3 font-semibold underline focus:outline-none focus:ring-2 focus:ring-red-700">Retry</button></div> : runs.length === 0 ? <div className="mt-5 rounded-md border border-dashed border-[#C8D3E0] bg-[#FAFBFC] p-6 text-center"><p className="font-medium text-[#334E68]">No saved simulations yet.</p><p className="mt-1 text-sm text-[#5A6472]">Run a simulation and save it to see it here.</p></div> : <ul className="mt-5 divide-y divide-[#E6EBF0] rounded-md border border-[#E1E5EA]">{runs.map((run) => <li key={run.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-[#334E68]">{run.scenarioName}</p><p className="mt-1 text-sm text-[#5A6472]">{formatRunDate(run.createdAt)} · {run.results.keyResult}</p></div><button type="button" onClick={() => openSavedRun(run)} className="inline-flex shrink-0 items-center justify-center rounded-md border border-[#0B3D91] px-3 py-2 text-sm font-semibold text-[#0B3D91] hover:bg-[#F0F5FC] focus:outline-none focus:ring-2 focus:ring-[#0B3D91] focus:ring-offset-2">Open</button></li>)}</ul>}
+          </section>
         </div>
       </main>
-
       <Footer />
+      {toast && <Toast message={toast.message} onClose={() => setToast(null)} />}
     </div>
   );
 }

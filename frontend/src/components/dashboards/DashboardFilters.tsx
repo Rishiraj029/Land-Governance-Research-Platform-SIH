@@ -1,30 +1,35 @@
 /**
- * DashboardFilters — global filter bar for the Dashboards Hub
- * Provides State, Year, Category, and District filters.
+ * DashboardFilters — filter bar for the Dashboards Hub.
+ * State, District (scoped to the selected state), Category, Year and free-text search.
+ * Every option is derived from the loaded public.dashboard_indicators rows.
  */
-import { RotateCcw, SlidersHorizontal } from "lucide-react";
-import type { DashboardFilters as DashboardFiltersType } from "../../types/dashboard";
-import { DASHBOARD_STATES, DASHBOARD_YEARS } from "../../lib/mockDashboardIndicators";
-
-const ALL_DISTRICTS = [
-  "Jaipur", "Jodhpur", "Udaipur",
-  "Mumbai", "Pune", "Nagpur", "Nashik",
-  "Ahmedabad", "Surat", "Vadodara", "Rajkot",
-  "Bangalore", "Mysore",
-  "Lucknow", "Kanpur",
-  "Bhopal", "Indore",
-  "Hyderabad", "Warangal",
-  "Khordha",
-];
+import { RotateCcw, Search, SlidersHorizontal } from "lucide-react";
+import type { DashboardFilterOptions, DashboardFilters as DashboardFiltersType } from "../../types/dashboard";
 
 interface Props {
   filters: DashboardFiltersType;
+  options: DashboardFilterOptions;
   onChange: (filters: DashboardFiltersType) => void;
   onReset: () => void;
   hasActiveFilters: boolean;
+  /** Rows matching the current filters. */
+  resultCount: number;
+  /** Rows loaded from the database. */
+  totalCount: number;
 }
 
-export default function DashboardFilters({ filters, onChange, onReset, hasActiveFilters }: Props) {
+const SELECT_CLASS =
+  "w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20 disabled:bg-[#F5F7FA] disabled:text-[#5A6472]";
+
+export default function DashboardFilters({
+  filters,
+  options,
+  onChange,
+  onReset,
+  hasActiveFilters,
+  resultCount,
+  totalCount,
+}: Props) {
   const handleChange = (field: keyof DashboardFiltersType, value: string) => {
     onChange({ ...filters, [field]: value });
   };
@@ -41,19 +46,42 @@ export default function DashboardFilters({ filters, onChange, onReset, hasActive
             </span>
           )}
         </div>
-        {hasActiveFilters && (
-          <button
-            onClick={onReset}
-            className="flex items-center gap-1 text-sm text-[#5A6472] hover:text-[#0B3D91] transition-colors"
-            aria-label="Reset all filters"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            Reset filters
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-[#5A6472]">
+            {resultCount} of {totalCount} records
+          </span>
+          {hasActiveFilters && (
+            <button
+              onClick={onReset}
+              className="flex items-center gap-1 text-sm text-[#5A6472] hover:text-[#0B3D91] transition-colors"
+              aria-label="Reset all filters"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset filters
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Search */}
+        <div className="sm:col-span-2 lg:col-span-4">
+          <label htmlFor="filter-search" className="block text-xs text-[#5A6472] mb-1 font-medium">
+            Search indicators
+          </label>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5A6472]" />
+            <input
+              id="filter-search"
+              type="search"
+              value={filters.search}
+              onChange={(e) => handleChange("search", e.target.value)}
+              placeholder="Indicator, category, state, district, unit or source"
+              className="w-full rounded-md border border-[#E1E5EA] bg-white pl-9 pr-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
+            />
+          </div>
+        </div>
+
         {/* State */}
         <div>
           <label htmlFor="filter-state" className="block text-xs text-[#5A6472] mb-1 font-medium">
@@ -63,29 +91,37 @@ export default function DashboardFilters({ filters, onChange, onReset, hasActive
             id="filter-state"
             value={filters.state}
             onChange={(e) => handleChange("state", e.target.value)}
-            className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
+            disabled={options.states.length === 0}
+            className={SELECT_CLASS}
           >
             <option value="">All States</option>
-            {DASHBOARD_STATES.map((s) => (
-              <option key={s} value={s}>{s}</option>
+            {options.states.map((state) => (
+              <option key={state} value={state}>
+                {state}
+              </option>
             ))}
           </select>
         </div>
 
-        {/* Year */}
+        {/* District — scoped to the selected state */}
         <div>
-          <label htmlFor="filter-year" className="block text-xs text-[#5A6472] mb-1 font-medium">
-            Year
+          <label htmlFor="filter-district" className="block text-xs text-[#5A6472] mb-1 font-medium">
+            District
           </label>
           <select
-            id="filter-year"
-            value={filters.year}
-            onChange={(e) => handleChange("year", e.target.value)}
-            className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
+            id="filter-district"
+            value={filters.district}
+            onChange={(e) => handleChange("district", e.target.value)}
+            disabled={options.districts.length === 0}
+            className={SELECT_CLASS}
           >
-            <option value="">All Years</option>
-            {DASHBOARD_YEARS.map((y) => (
-              <option key={y} value={String(y)}>{y}</option>
+            <option value="">
+              {filters.state ? `All districts in ${filters.state}` : "All Districts"}
+            </option>
+            {options.districts.map((district) => (
+              <option key={district} value={district}>
+                {district}
+              </option>
             ))}
           </select>
         </div>
@@ -99,32 +135,35 @@ export default function DashboardFilters({ filters, onChange, onReset, hasActive
             id="filter-category"
             value={filters.category}
             onChange={(e) => handleChange("category", e.target.value)}
-            className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
+            disabled={options.categories.length === 0}
+            className={SELECT_CLASS}
           >
             <option value="">All Categories</option>
-            <option value="Land Governance Overview">Land Governance Overview</option>
-            <option value="Land Use & Urbanization">Land Use &amp; Urbanization</option>
-            <option value="Tenure & Land Records">Tenure &amp; Land Records</option>
-            <option value="Land Disputes">Land Disputes</option>
-            <option value="Climate & Land">Climate &amp; Land</option>
-            <option value="Geospatial Governance">Geospatial Governance</option>
+            {options.categories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
           </select>
         </div>
 
-        {/* District */}
+        {/* Year */}
         <div>
-          <label htmlFor="filter-district" className="block text-xs text-[#5A6472] mb-1 font-medium">
-            District
+          <label htmlFor="filter-year" className="block text-xs text-[#5A6472] mb-1 font-medium">
+            Year
           </label>
           <select
-            id="filter-district"
-            value={filters.district}
-            onChange={(e) => handleChange("district", e.target.value)}
-            className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
+            id="filter-year"
+            value={filters.year}
+            onChange={(e) => handleChange("year", e.target.value)}
+            disabled={options.years.length === 0}
+            className={SELECT_CLASS}
           >
-            <option value="">All Districts</option>
-            {ALL_DISTRICTS.map((d) => (
-              <option key={d} value={d}>{d}</option>
+            <option value="">All Years</option>
+            {options.years.map((year) => (
+              <option key={year} value={String(year)}>
+                {year}
+              </option>
             ))}
           </select>
         </div>
@@ -134,24 +173,29 @@ export default function DashboardFilters({ filters, onChange, onReset, hasActive
       {hasActiveFilters && (
         <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-[#E1E5EA]">
           <span className="text-xs text-[#5A6472]">Active:</span>
+          {filters.search && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-[#0B3D91]/10 text-[#0B3D91] rounded-full">
+              Search: “{filters.search}”
+            </span>
+          )}
           {filters.state && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-[#0B3D91]/10 text-[#0B3D91] rounded-full">
               State: {filters.state}
             </span>
           )}
-          {filters.year && (
+          {filters.district && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-[#0B3D91]/10 text-[#0B3D91] rounded-full">
-              Year: {filters.year}
+              District: {filters.district}
             </span>
           )}
           {filters.category && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-[#0B3D91]/10 text-[#0B3D91] rounded-full">
-              {filters.category}
+              Category: {filters.category}
             </span>
           )}
-          {filters.district && (
+          {filters.year && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-[#0B3D91]/10 text-[#0B3D91] rounded-full">
-              District: {filters.district}
+              Year: {filters.year}
             </span>
           )}
         </div>

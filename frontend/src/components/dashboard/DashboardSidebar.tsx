@@ -1,95 +1,29 @@
 import { Link, useLocation } from "react-router-dom";
-import {
-  Home,
-  Upload,
-  FolderKanban,
-  Search,
-  Activity,
-  Lightbulb,
-  Settings,
-  LogOut,
-  Database,
-  Shield,
-  Landmark,
-  BookOpen,
-  Map as MapIcon,
-  BarChart3,
-  FlaskConical,
-} from "lucide-react";
+import { Landmark, LogOut } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
-import type { UserRole } from "../../types/auth";
-
-const ROLE_LABELS: Record<UserRole, string> = {
-  citizen: "Citizen",
-  researcher: "Verified Researcher",
-  policymaker: "Government Official",
-  admin: "Administrator",
-};
-
-interface NavItem {
-  name: string;
-  path: string;
-  icon: any;
-  requiredRoles?: UserRole[];
-}
-
-const BASE_NAV_ITEMS: NavItem[] = [
-  { name: "Overview", path: "/dashboard", icon: Home },
-  { name: "My Uploads", path: "/dashboard/uploads", icon: Upload },
-  { name: "My Workspaces", path: "/dashboard/workspaces", icon: FolderKanban },
-  { name: "Saved Searches", path: "/dashboard/saved-searches", icon: Search },
-  { name: "My Simulations", path: "/dashboard/simulations", icon: Activity },
-  { name: "Innovation Submissions", path: "/dashboard/innovation", icon: Lightbulb },
-  { name: "Settings", path: "/dashboard/settings", icon: Settings },
-];
-
-/** Public platform sections, so signed-in users can navigate the whole site. */
-export const PLATFORM_NAV_ITEMS: NavItem[] = [
-  { name: "Home", path: "/", icon: Landmark },
-  { name: "Knowledge Repository", path: "/repository", icon: BookOpen },
-  { name: "GIS Explorer", path: "/gis-explorer", icon: MapIcon },
-  { name: "Dashboards", path: "/dashboards", icon: BarChart3 },
-  { name: "Simulation Lab", path: "/simulation-lab", icon: FlaskConical },
-  { name: "Innovation Portal", path: "/innovation-portal", icon: Lightbulb },
-];
-
-const ROLE_SPECIFIC_NAV_ITEMS: NavItem[] = [
-  { 
-    name: "Department/Institution Data", 
-    path: "/dashboard/department-data", 
-    icon: Database,
-    requiredRoles: ["policymaker", "admin"] 
-  },
-  { 
-    name: "Admin Panel", 
-    path: "/dashboard/admin", 
-    icon: Shield,
-    requiredRoles: ["admin"] 
-  },
-];
+import { useProfile } from "../../hooks/useProfile";
+import { ROLE_LABELS } from "../../lib/roles";
+import { PLATFORM_NAV_ITEMS, getDashboardNavItems } from "./dashboardNav";
 
 export default function DashboardSidebar() {
   const location = useLocation();
   const { user, signOut } = useAuth();
-  
-  // Get user role from metadata
-  const appMetadataRole = typeof user?.app_metadata?.role === "string" ? user.app_metadata.role : null;
-  const userMetadataRole = typeof user?.user_metadata?.role === "string" ? user.user_metadata.role : null;
-  const role = (appMetadataRole ?? userMetadataRole) as UserRole | null;
-  
-  const fullName = typeof user?.user_metadata?.full_name === "string" ? user.user_metadata.full_name : null;
+  // Role comes from public.profiles (see useProfile), never from client-editable metadata.
+  const { profile, role } = useProfile();
+
+  const metadataName = typeof user?.user_metadata?.full_name === "string" ? user.user_metadata.full_name : null;
+  const fullName = profile?.full_name ?? metadataName;
   const email = user?.email ?? "Unknown email";
-  const initials = fullName ? fullName.split(' ').map(n => n[0]).join('').toUpperCase() : email[0].toUpperCase();
+  const initials = (fullName?.trim() || email)
+    .split(/[\s@._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("").toUpperCase();
 
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + "/");
 
-  // Filter nav items based on user role
-  const availableNavItems = [
-    ...BASE_NAV_ITEMS,
-    ...ROLE_SPECIFIC_NAV_ITEMS.filter(item => 
-      !item.requiredRoles || (role && item.requiredRoles.includes(role))
-    )
-  ];
+  const availableNavItems = getDashboardNavItems(role);
 
   async function handleSignOut() {
     await signOut();
@@ -122,6 +56,9 @@ export default function DashboardSidebar() {
               <span className="inline-flex items-center text-xs font-medium text-[#138808]">
                 {ROLE_LABELS[role] || role}
               </span>
+            )}
+            {profile?.institution && (
+              <p className="text-xs text-[#5A6472] truncate">{profile.institution}</p>
             )}
           </div>
         </div>

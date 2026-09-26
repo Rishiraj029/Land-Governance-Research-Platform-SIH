@@ -20,7 +20,12 @@ import {
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
 import { CONTENT_TYPES, THEMES, STATES, LANGUAGES, ACCESS_TIERS } from "../lib/mockRepositoryData";
-import { loadRepositoryDocuments } from "../lib/supabaseRepository";
+import {
+  loadRepositoryDocuments,
+  loadBookmarkedDocumentIds,
+  addDocumentBookmark,
+  removeDocumentBookmark,
+} from "../lib/supabaseRepository";
 import type { 
   RepositoryFilters, 
   SortOption, 
@@ -55,6 +60,8 @@ export default function Repository() {
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Bumping this key re-runs the loader (used by "Try again" and after a successful upload).
+  const [reloadKey, setReloadKey] = useState(0);
   
   // Filter state
   const [filters, setFilters] = useState<RepositoryFilters>({
@@ -67,12 +74,15 @@ export default function Repository() {
     accessTiers: [],
   });
 
-  // Load documents from Supabase
+  // Load documents from Supabase. Page 1 replaces the list, later pages append to it so
+  // "Load more" keeps the documents that are already on screen.
   useEffect(() => {
+    let isCurrent = true;
+
     const loadDocuments = async () => {
       setIsLoading(true);
       setError(null);
-      
+
       const result = await loadRepositoryDocuments(
         filters,
         searchQuery,
@@ -80,21 +90,56 @@ export default function Repository() {
         currentPage,
         itemsPerPage
       );
-      
+
+      if (!isCurrent) return;
+
       if (result.error) {
         setError(result.error);
-        setDocuments([]);
-        setTotalCount(0);
+        if (currentPage === 1) {
+          setDocuments([]);
+          setTotalCount(0);
+        }
       } else {
-        setDocuments(result.documents);
         setTotalCount(result.totalCount);
+        setDocuments(prev => {
+          if (currentPage === 1) return result.documents;
+          const known = new Set(prev.map(doc => doc.id));
+          return [...prev, ...result.documents.filter(doc => !known.has(doc.id))];
+        });
       }
-      
+
       setIsLoading(false);
     };
 
     loadDocuments();
-  }, [filters, searchQuery, sortBy, currentPage, itemsPerPage]);
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [filters, searchQuery, sortBy, currentPage, itemsPerPage, reloadKey]);
+
+  // Load the signed-in user's saved documents from public.document_bookmarks so the
+  // bookmark icons reflect what is actually stored in Supabase.
+  useEffect(() => {
+    let isCurrent = true;
+
+    if (!user) {
+      setSavedItems(new Set());
+      return;
+    }
+
+    const loadBookmarks = async () => {
+      const result = await loadBookmarkedDocumentIds(user.id);
+      if (!isCurrent || result.error) return;
+      setSavedItems(new Set(result.ids));
+    };
+
+    loadBookmarks();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [user, reloadKey]);
 
   // Pagination
   const totalPages = Math.ceil(totalCount / itemsPerPage);
@@ -137,22 +182,43 @@ export default function Repository() {
     (value as any).from || (value as any).to : false
   ) || searchQuery.trim().length > 0 || currentPage > 1;
 
-  // Bookmark handler
-  const toggleBookmark = (docId: string, e: React.MouseEvent) => {
+  // Bookmark handler — persists to public.document_bookmarks through Supabase
+  const toggleBookmark = async (docId: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+
+    if (!user) {
+      setToastMessage("Sign in to save documents to your account");
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+      return;
+    }
+
+    const wasSaved = savedItems.has(docId);
     
+    // Optimistic update; reverted if Supabase rejects the change (for example by RLS).
     setSavedItems(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(docId)) {
-        newSet.delete(docId);
-        setToastMessage("Removed from saved items");
-      } else {
-        newSet.add(docId);
-        setToastMessage("Added to saved items");
-      }
-      return newSet;
+      const next = new Set(prev);
+      if (wasSaved) next.delete(docId);
+      else next.add(docId);
+      return next;
     });
+
+    const result = wasSaved
+      ? await removeDocumentBookmark(user.id, docId)
+      : await addDocumentBookmark(user.id, docId);
+
+    if (result.error) {
+      setSavedItems(prev => {
+        const next = new Set(prev);
+        if (wasSaved) next.add(docId);
+        else next.delete(docId);
+        return next;
+      });
+      setToastMessage(result.error);
+    } else {
+      setToastMessage(wasSaved ? "Removed from saved documents" : "Added to saved documents");
+    }
     
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3000);
@@ -169,8 +235,9 @@ export default function Repository() {
 
   // Handle successful upload
   const handleUploadSuccess = () => {
-    // Reload documents to show the newly uploaded one
-    window.location.reload();
+    // Refetch from Supabase so the new document appears without a full page reload.
+    setCurrentPage(1);
+    setReloadKey(key => key + 1);
   };
 
   // Document click handler
@@ -531,7 +598,7 @@ export default function Repository() {
               </div>
 
               {/* Results */}
-              {isLoading ? (
+              {isLoading && paginatedDocuments.length === 0 ? (
                 <div className="text-center py-12">
                   <Loader2 className="h-12 w-12 text-[#0B3D91] mx-auto mb-4 animate-spin" />
                   <h3 className="text-lg font-semibold text-[#1F2933] mb-2">Loading documents...</h3>
@@ -543,7 +610,10 @@ export default function Repository() {
                   <h3 className="text-lg font-semibold text-[#1F2933] mb-2">Error loading documents</h3>
                   <p className="text-[#5A6472] mb-4">{error}</p>
                   <button
-                    onClick={() => window.location.reload()}
+                    onClick={() => {
+                      setCurrentPage(1);
+                      setReloadKey(key => key + 1);
+                    }}
                     className="rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63]"
                   >
                     Try again
@@ -683,10 +753,10 @@ export default function Repository() {
                     <div className="mt-8 flex justify-center">
                       <button
                         onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                        disabled={currentPage >= totalPages}
+                        disabled={currentPage >= totalPages || isLoading}
                         className="px-6 py-2 rounded-md bg-[#0B3D91] text-white text-sm font-semibold hover:bg-[#062A63] disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Load More
+                        {isLoading ? "Loading..." : "Load More"}
                       </button>
                     </div>
                   )}

@@ -1,166 +1,167 @@
 /**
- * RegionalComparison — bar chart comparing states on a selected metric.
+ * RegionalComparison — compares states on one indicator from the rows in view.
+ * State names and the metric list are read from the data; nothing is hardcoded.
  */
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
-  ResponsiveContainer,
-  BarChart,
   Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  Cell,
 } from "recharts";
-import type { DashboardRecord } from "../../types/dashboard";
-import type { IndicatorName } from "../../types/dashboard";
-import { STATE_COLORS } from "../../lib/mockDashboardIndicators";
-
-const METRICS: IndicatorName[] = [
-  "Land Records Digitization",
-  "Land Dispute Cases",
-  "Urban Expansion Rate",
-  "Tenure Security Index",
-  "Climate Risk Index",
-];
+import { BarChart3 } from "lucide-react";
+import type { DashboardIndicator } from "../../types/dashboard";
+import {
+  defaultIndicator,
+  hasMixedUnits,
+  listIndicators,
+  meanValueByState,
+  paletteColor,
+  singleUnit,
+} from "../../lib/supabaseDashboards";
 
 interface Props {
-  records: DashboardRecord[];
-  filterState: string;
-  filterYear: string;
+  /** Rows matching the active filters. */
+  records: DashboardIndicator[];
 }
 
-interface ChartRow {
-  state: string;
-  shortName: string;
-  value: number;
+export default function RegionalComparison({ records }: Props) {
+  const indicators = useMemo(() => listIndicators(records), [records]);
+  const fallbackIndicator = useMemo(() => defaultIndicator(records), [records]);
+  const [requested, setRequested] = useState<string>("");
+  const activeIndicator = indicators.includes(requested)
+    ? requested
+    : (fallbackIndicator || (indicators[0] ?? ""));
+
+  const indicatorRows = useMemo(
+    () => records.filter((record) => record.indicatorName === activeIndicator),
+    [records, activeIndicator],
+  );
+
+  const unitsAreMixed = hasMixedUnits(indicatorRows);
+  const unit = unitsAreMixed ? null : singleUnit(indicatorRows);
+  const chartData = useMemo(() => meanValueByState(indicatorRows), [indicatorRows]);
+
+  if (indicators.length === 0) {
+    return (
+      <Shell>
+        <div className="flex items-center justify-center h-48 text-[#5A6472] text-sm">
+          No indicators in the current selection.
+        </div>
+      </Shell>
+    );
+  }
+
+  return (
+    <Shell
+      selector={
+        <select
+          id="regional-metric"
+          value={activeIndicator}
+          onChange={(event) => setRequested(event.target.value)}
+          className="rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
+        >
+          {indicators.map((indicator) => (
+            <option key={indicator} value={indicator}>
+              {indicator}
+            </option>
+          ))}
+        </select>
+      }
+    >
+      {unitsAreMixed ? (
+        <div className="flex flex-col items-center justify-center h-48 text-center px-6">
+          <BarChart3 className="h-8 w-8 text-[#E1E5EA] mb-3" />
+          <p className="text-sm text-[#5A6472]">
+            This indicator uses more than one unit, so states cannot be compared on a single
+            scale. Narrow the filters to one unit first.
+          </p>
+        </div>
+      ) : chartData.length > 0 ? (
+        <>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E1E5EA" vertical={false} />
+              <XAxis
+                dataKey="state"
+                interval={0}
+                angle={-35}
+                textAnchor="end"
+                height={72}
+                tick={{ fill: "#5A6472", fontSize: 11 }}
+                axisLine={{ stroke: "#E1E5EA" }}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fill: "#5A6472", fontSize: 12 }}
+                axisLine={false}
+                tickLine={false}
+                label={{
+                  value: unit ?? "value",
+                  angle: -90,
+                  position: "insideLeft",
+                  style: { fill: "#5A6472", fontSize: 11 },
+                  offset: 10,
+                }}
+              />
+              <Tooltip
+                contentStyle={{
+                  borderRadius: 8,
+                  border: "1px solid #E1E5EA",
+                  fontSize: 12,
+                  color: "#1F2933",
+                }}
+                formatter={(value) => [`${value}${unit ? ` ${unit}` : ""}`, activeIndicator]}
+              />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                {chartData.map((entry) => (
+                  <Cell key={entry.state} fill={paletteColor(entry.state)} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <p className="text-xs text-[#5A6472] mt-2">
+            Mean value per state, highest first — {chartData.length}{" "}
+            {chartData.length === 1 ? "state" : "states"} in the current selection.
+          </p>
+        </>
+      ) : (
+        <div className="flex items-center justify-center h-48 text-[#5A6472] text-sm">
+          No comparison data for the current filters.
+        </div>
+      )}
+    </Shell>
+  );
 }
 
-const SHORT_NAMES: Record<string, string> = {
-  "Rajasthan": "RJ",
-  "Maharashtra": "MH",
-  "Gujarat": "GJ",
-  "Karnataka": "KA",
-  "Uttar Pradesh": "UP",
-  "Madhya Pradesh": "MP",
-  "Telangana": "TG",
-  "Odisha": "OD",
-};
-
-function avg(values: number[]): number {
-  if (values.length === 0) return 0;
-  return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
-}
-
-export default function RegionalComparison({ records, filterState, filterYear }: Props) {
-  const [selectedMetric, setSelectedMetric] = useState<IndicatorName>("Land Records Digitization");
-
-  const chartData = useMemo<ChartRow[]>(() => {
-    const metricRecords = records.filter((r) => r.indicator === selectedMetric);
-
-    // When a single state is set, show just that state highlighted
-    const states = filterState
-      ? [filterState]
-      : [...new Set(metricRecords.map((r) => r.state))].sort();
-
-    return states.map((state) => {
-      const stateRecords = metricRecords.filter((r) => r.state === state);
-      const yearFiltered = filterYear
-        ? stateRecords.filter((r) => r.year === parseInt(filterYear))
-        : stateRecords;
-      const value = avg((yearFiltered.length > 0 ? yearFiltered : stateRecords).map((r) => r.value));
-      return { state, shortName: SHORT_NAMES[state] ?? state.slice(0, 2), value };
-    });
-  }, [records, selectedMetric, filterState, filterYear]);
-
-  const unit = records.find((r) => r.indicator === selectedMetric)?.unit ?? "";
-  const hasData = chartData.some((d) => d.value > 0);
-
+function Shell({
+  children,
+  selector,
+}: {
+  children: React.ReactNode;
+  selector?: React.ReactNode;
+}) {
   return (
     <div className="bg-white border border-[#E1E5EA] rounded-lg p-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
-          <h3 className="text-base font-semibold text-[#1F2933]">Regional Comparison</h3>
-          <p className="text-xs text-[#5A6472]">
-            {filterState
-              ? `Showing ${filterState} — select a metric to compare`
-              : "Compare states by indicator"}
-          </p>
+          <h3 className="text-base font-semibold text-[#1F2933]">State Comparison</h3>
+          <p className="text-xs text-[#5A6472]">Compare states on a single indicator</p>
         </div>
-        <div>
-          <label htmlFor="regional-metric" className="sr-only">Select metric</label>
-          <select
-            id="regional-metric"
-            value={selectedMetric}
-            onChange={(e) => setSelectedMetric(e.target.value as IndicatorName)}
-            className="rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-          >
-            {METRICS.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-        </div>
+        {selector && (
+          <div>
+            <label htmlFor="regional-metric" className="sr-only">
+              Select metric
+            </label>
+            {selector}
+          </div>
+        )}
       </div>
-
-      {hasData ? (
-        <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#E1E5EA" vertical={false} />
-            <XAxis
-              dataKey="shortName"
-              tick={{ fill: "#5A6472", fontSize: 12 }}
-              axisLine={{ stroke: "#E1E5EA" }}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fill: "#5A6472", fontSize: 12 }}
-              axisLine={false}
-              tickLine={false}
-              label={{
-                value: unit,
-                angle: -90,
-                position: "insideLeft",
-                style: { fill: "#5A6472", fontSize: 11 },
-                offset: 10,
-              }}
-            />
-            <Tooltip
-              contentStyle={{
-                borderRadius: 8,
-                border: "1px solid #E1E5EA",
-                fontSize: 12,
-                color: "#1F2933",
-              }}
-              formatter={(value: any) => [`${value} ${unit}`, selectedMetric]}
-              labelFormatter={(label: any) => {
-                const full = chartData.find((d) => d.shortName === String(label))?.state ?? label;
-                return full;
-              }}
-            />
-            <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-              {chartData.map((entry) => (
-                <Cell
-                  key={entry.state}
-                  fill={
-                    filterState && entry.state === filterState
-                      ? "#0B3D91"
-                      : (STATE_COLORS[entry.state] ?? "#0B3D91")
-                  }
-                  fillOpacity={filterState && entry.state !== filterState ? 0.5 : 1}
-                />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      ) : (
-        <div className="flex items-center justify-center h-48 text-[#5A6472] text-sm">
-          No comparison data for current filters.
-        </div>
-      )}
-
-      <p className="text-xs text-[#5A6472] mt-2">
-        Prototype data · Values are illustrative and not official government statistics.
-      </p>
+      {children}
     </div>
   );
 }

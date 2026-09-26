@@ -75,7 +75,7 @@ export default function Navbar() {
           </div>
 
           {/* Center-left: Primary nav links (desktop) */}
-          <div className="hidden md:flex md:items-center md:gap-1">
+          <div className="hidden lg:flex lg:items-center lg:gap-1">
             {NAV_LINKS.map((link) => (
               <Link
                 key={link.path}
@@ -95,7 +95,7 @@ export default function Navbar() {
           </div>
 
           {/* Center-right: Search bar */}
-          <div className="hidden md:flex md:flex-1 md:items-center md:justify-center md:px-8">
+          <div className="hidden lg:flex lg:flex-1 lg:items-center lg:justify-center lg:px-8">
             <div className="relative w-full max-w-md">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#5A6472]" />
               <input
@@ -221,7 +221,7 @@ export default function Navbar() {
                 )}
               </div>
             ) : (
-              <div className="hidden sm:flex sm:items-center sm:gap-2">
+              <div className="hidden lg:flex lg:items-center lg:gap-2">
                 <Link
                   to="/auth"
                   state={{ from: location.pathname }}
@@ -241,7 +241,7 @@ export default function Navbar() {
 
             {/* Mobile menu button */}
             <button
-              className="rounded-md p-2 text-[#5A6472] hover:bg-[#F5F7FA] md:hidden"
+              className="rounded-md p-2 text-[#5A6472] hover:bg-[#F5F7FA] lg:hidden"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
               aria-expanded={mobileMenuOpen}
@@ -258,7 +258,7 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="border-t border-[#E1E5EA] bg-white md:hidden">
+        <div className="border-t border-[#E1E5EA] bg-white lg:hidden">
           <div className="space-y-1 px-4 py-3">
             {NAV_LINKS.map((link) => (
               <Link

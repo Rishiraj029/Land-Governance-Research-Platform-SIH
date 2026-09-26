@@ -1,149 +1,230 @@
 /**
- * TrendChart — line/area chart showing indicator trends over time.
- * Responds to state and year filters from the parent Dashboards page.
+ * TrendChart — year-over-year trend for one indicator, taken from the rows in view.
+ * The indicator list, states, years and unit all come from the data, never from
+ * a hardcoded reference list.
  */
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
-  ResponsiveContainer,
-  LineChart,
+  CartesianGrid,
+  Legend,
   Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
 } from "recharts";
-import type { DashboardRecord } from "../../types/dashboard";
-import type { IndicatorName } from "../../types/dashboard";
-import { TREND_INDICATORS, DASHBOARD_STATES, STATE_COLORS } from "../../lib/mockDashboardIndicators";
+import { TrendingUp } from "lucide-react";
+import type { DashboardIndicator } from "../../types/dashboard";
+import {
+  defaultIndicator,
+  hasMixedUnits,
+  listIndicators,
+  listStates,
+  paletteColor,
+  singleUnit,
+} from "../../lib/supabaseDashboards";
 
 interface Props {
-  records: DashboardRecord[];
-  filterState: string;
-  filterYear: string;
+  /** Rows matching the active filters. */
+  records: DashboardIndicator[];
 }
 
-interface ChartRow {
-  year: number;
-  [state: string]: number;
-}
+type ChartRow = { year: number } & Record<string, number>;
 
-export default function TrendChart({ records, filterState, filterYear }: Props) {
-  const [selectedIndicator, setSelectedIndicator] = useState<IndicatorName>("Land Records Digitization");
+/** More than this many states makes a line chart unreadable, so we aggregate. */
+const MAX_SERIES = 6;
 
-  // When a specific state is selected, show only that one; otherwise show all 8
-  const statesToShow = filterState ? [filterState] : DASHBOARD_STATES.slice();
+export default function TrendChart({ records }: Props) {
+  const indicators = useMemo(() => listIndicators(records), [records]);
+  const fallbackIndicator = useMemo(() => defaultIndicator(records), [records]);
+  const [requested, setRequested] = useState<string>("");
 
-  // Build chart data: one row per year, one column per state
+  // Derive the selection instead of syncing it with an effect, so a filter change
+  // that removes the selected indicator can never leave the chart blank.
+  const activeIndicator = indicators.includes(requested)
+    ? requested
+    : (fallbackIndicator || (indicators[0] ?? ""));
+
+  const indicatorRows = useMemo(
+    () => records.filter((record) => record.indicatorName === activeIndicator),
+    [records, activeIndicator],
+  );
+
+  const states = useMemo(() => listStates(indicatorRows), [indicatorRows]);
+  const aggregate = states.length > MAX_SERIES;
+  const unitsAreMixed = hasMixedUnits(indicatorRows);
+  const unit = unitsAreMixed ? null : singleUnit(indicatorRows);
+
   const chartData = useMemo<ChartRow[]>(() => {
-    const indicatorRecords = records.filter((r) => r.indicator === selectedIndicator);
-
-    // Collect all years present
-    const years = [...new Set(indicatorRecords.map((r) => r.year))].sort((a, b) => a - b);
+    const years = [
+      ...new Set(
+        indicatorRows.map((row) => row.year).filter((year): year is number => year !== null),
+      ),
+    ].sort((a, b) => a - b);
 
     return years.map((year) => {
       const row: ChartRow = { year };
-      statesToShow.forEach((state) => {
-        const stateYearRecords = indicatorRecords.filter(
-          (r) => r.state === state && r.year === year
-        );
-        if (stateYearRecords.length > 0) {
-          const sum = stateYearRecords.reduce((a, b) => a + b.value, 0);
-          row[state] = Math.round(sum / stateYearRecords.length);
+      const yearRows = indicatorRows.filter((item) => item.year === year);
+
+      if (aggregate) {
+        const values = yearRows
+          .map((item) => item.value)
+          .filter((value): value is number => value !== null);
+        if (values.length > 0) {
+          row["All states (mean)"] = Number(
+            (values.reduce((total, value) => total + value, 0) / values.length).toFixed(2),
+          );
         }
-      });
+        return row;
+      }
+
+      for (const state of states) {
+        const values = yearRows
+          .filter((item) => item.state === state)
+          .map((item) => item.value)
+          .filter((value): value is number => value !== null);
+        if (values.length > 0) {
+          row[state] = Number(
+            (values.reduce((total, value) => total + value, 0) / values.length).toFixed(2),
+          );
+        }
+      }
       return row;
     });
-  }, [records, selectedIndicator, filterState, statesToShow]);
+  }, [indicatorRows, states, aggregate]);
 
-  // Pick unit from data
-  const unit = records.find((r) => r.indicator === selectedIndicator)?.unit ?? "";
+  const series = aggregate ? ["All states (mean)"] : states;
+  const hasData =
+    chartData.length > 0 &&
+    series.some((name) => chartData.some((row) => row[name] !== undefined));
 
-  const hasData = chartData.length > 0 && chartData.some((row) =>
-    statesToShow.some((s) => row[s] !== undefined)
+  if (indicators.length === 0) {
+    return (
+      <ChartShell>
+        <div className="flex items-center justify-center h-48 text-[#5A6472] text-sm">
+          No indicators in the current selection.
+        </div>
+      </ChartShell>
+    );
+  }
+
+  return (
+    <ChartShell
+      selector={
+        <select
+          id="trend-indicator"
+          value={activeIndicator}
+          onChange={(event) => setRequested(event.target.value)}
+          className="rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
+        >
+          {indicators.map((indicator) => (
+            <option key={indicator} value={indicator}>
+              {indicator}
+            </option>
+          ))}
+        </select>
+      }
+    >
+      {unitsAreMixed ? (
+        <div className="flex flex-col items-center justify-center h-48 text-center px-6">
+          <TrendingUp className="h-8 w-8 text-[#E1E5EA] mb-3" />
+          <p className="text-sm text-[#5A6472]">
+            This indicator reports values in more than one unit, so a single trend line
+            would not be comparable. Narrow the filters to one unit to see the trend.
+          </p>
+        </div>
+      ) : hasData ? (
+        <>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E1E5EA" />
+              <XAxis
+                dataKey="year"
+                tick={{ fill: "#5A6472", fontSize: 12 }}
+                axisLine={{ stroke: "#E1E5EA" }}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fill: "#5A6472", fontSize: 12 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(value: number) => `${value}`}
+                label={{
+                  value: unit ?? "value",
+                  angle: -90,
+                  position: "insideLeft",
+                  style: { fill: "#5A6472", fontSize: 11 },
+                  offset: 10,
+                }}
+              />
+              <Tooltip
+                contentStyle={{
+                  borderRadius: 8,
+                  border: "1px solid #E1E5EA",
+                  fontSize: 12,
+                  color: "#1F2933",
+                }}
+                formatter={(value) => [`${value}${unit ? ` ${unit}` : ""}`, ""]}
+              />
+              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 12, color: "#5A6472" }} />}
+              {series.map((name) => (
+                <Line
+                  key={name}
+                  type="monotone"
+                  dataKey={name}
+                  stroke={paletteColor(name)}
+                  strokeWidth={2}
+                  dot={{ r: 3, fill: paletteColor(name) }}
+                  activeDot={{ r: 5 }}
+                  connectNulls
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+          {chartData.length === 1 && (
+            <p className="text-xs text-[#5A6472] mt-2">
+              Only one year is present for this indicator in the current selection, so no
+              multi-year trend can be drawn.
+            </p>
+          )}
+        </>
+      ) : (
+        <div className="flex items-center justify-center h-48 text-[#5A6472] text-sm">
+          No trend data for the current filters.
+        </div>
+      )}
+    </ChartShell>
   );
+}
 
+/** Shared card frame so loading/empty/chart states keep the same chrome. */
+function ChartShell({
+  children,
+  selector,
+}: {
+  children: React.ReactNode;
+  selector?: React.ReactNode;
+}) {
   return (
     <div className="bg-white border border-[#E1E5EA] rounded-lg p-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div>
           <h3 className="text-base font-semibold text-[#1F2933]">Indicator Trends</h3>
           <p className="text-xs text-[#5A6472]">
-            Year-over-year indicator progression
-            {filterYear ? ` — Year filter: all years shown for context` : ""}
+            Mean value per year for the selected indicator
           </p>
         </div>
-        <div>
-          <label htmlFor="trend-indicator" className="sr-only">Select indicator</label>
-          <select
-            id="trend-indicator"
-            value={selectedIndicator}
-            onChange={(e) => setSelectedIndicator(e.target.value as IndicatorName)}
-            className="rounded-md border border-[#E1E5EA] bg-white px-3 py-1.5 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-          >
-            {TREND_INDICATORS.map((ind) => (
-              <option key={ind} value={ind}>{ind}</option>
-            ))}
-          </select>
-        </div>
+        {selector && (
+          <div>
+            <label htmlFor="trend-indicator" className="sr-only">
+              Select indicator
+            </label>
+            {selector}
+          </div>
+        )}
       </div>
-
-      {hasData ? (
-        <ResponsiveContainer width="100%" height={240}>
-          <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#E1E5EA" />
-            <XAxis
-              dataKey="year"
-              tick={{ fill: "#5A6472", fontSize: 12 }}
-              axisLine={{ stroke: "#E1E5EA" }}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fill: "#5A6472", fontSize: 12 }}
-              axisLine={false}
-              tickLine={false}
-              tickFormatter={(v: number) => `${v}`}
-              label={{
-                value: unit,
-                angle: -90,
-                position: "insideLeft",
-                style: { fill: "#5A6472", fontSize: 11 },
-                offset: 10,
-              }}
-            />
-            <Tooltip
-              contentStyle={{
-                borderRadius: 8,
-                border: "1px solid #E1E5EA",
-                fontSize: 12,
-                color: "#1F2933",
-              }}
-              formatter={(value: any) => [`${value} ${unit}`, ""]}
-            />
-            {statesToShow.length > 1 && <Legend wrapperStyle={{ fontSize: 12, color: "#5A6472" }} />}
-            {statesToShow.map((state) => (
-              <Line
-                key={state}
-                type="monotone"
-                dataKey={state}
-                stroke={STATE_COLORS[state] ?? "#0B3D91"}
-                strokeWidth={2}
-                dot={{ r: 3, fill: STATE_COLORS[state] ?? "#0B3D91" }}
-                activeDot={{ r: 5 }}
-                connectNulls
-              />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
-      ) : (
-        <div className="flex items-center justify-center h-48 text-[#5A6472] text-sm">
-          No trend data for current filters.
-        </div>
-      )}
-
-      <p className="text-xs text-[#5A6472] mt-2">
-        Prototype data · Values are illustrative and not official government statistics.
-      </p>
+      {children}
     </div>
   );
 }

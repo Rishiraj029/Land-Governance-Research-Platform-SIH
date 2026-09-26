@@ -1,8 +1,8 @@
 /**
  * Repository types for PAGE 4 — Knowledge Repository
  * 
- * These types are designed to map cleanly to Supabase tables in the future.
- * The current implementation uses mock data, but the structure is database-ready.
+ * These types mirror the columns of the `repository_documents` table in Supabase;
+ * document records are loaded at runtime through lib/supabaseRepository.ts.
  */
 
 export type ContentType = 
@@ -49,12 +49,11 @@ export interface RepositoryDocument {
   fileName?: string;
   fileSize?: number;
   mimeType?: string;
-  // UI-only fields (optional, not in database)
-  views?: number;
-  downloads?: number;
-  citations?: number;
-  thumbnail?: string;
-  featured?: boolean;
+  /**
+   * auth user id of the contributor. Null for the seeded government records, which were
+   * imported without an owner, so it is only ever used to find a user's *own* uploads.
+   */
+  createdBy?: string;
 }
 
 export interface RepositoryFilters {

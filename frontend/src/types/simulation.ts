@@ -1,45 +1,52 @@
-export type ParameterType = 'slider' | 'number' | 'toggle';
+export type SimulationScenarioId =
+  | 'land-record-digitization'
+  | 'property-mapping-coverage'
+  | 'land-dispute-reduction'
+  | 'land-record-processing-efficiency';
 
-export interface SimulationParameter {
+export interface SimulationParameterDefinition {
   id: string;
-  name: string;
-  type: ParameterType;
-  min?: number;
-  max?: number;
-  step?: number;
-  defaultValue: number | boolean;
-  unit?: string;
-  description?: string;
+  label: string;
+  unit: string;
+  description: string;
+  min: number;
+  max: number;
+  allowZero?: boolean;
 }
 
 export interface SimulationScenario {
-  id: string;
+  id: SimulationScenarioId;
   title: string;
   description: string;
-  objective: string;
-  baselineValue: number;
-  baselineLabel: string;
-  parameters: SimulationParameter[];
-  metrics: { label: string; key: string; isPercentage?: boolean }[];
-  calculate: (params: Record<string, any>, baseline: number) => SimulationResult;
+  parameters: SimulationParameterDefinition[];
 }
 
+/** Exact numeric assumptions used in a completed calculation. */
+export type SimulationParameters = Record<string, number>;
+
+export interface SimulationOutcome {
+  label: string;
+  value: number;
+  unit: string;
+  detail?: string;
+}
+
+/** Deterministic result stored in simulation_runs.results. */
 export interface SimulationResult {
-  baseline: number;
-  projected: number;
-  changeAbsolute: number;
-  changePercentage: number;
-  implementationPeriod: number;
-  metrics: Record<string, number | string>;
-  yearlyProjection: { year: string; baseline: number; projected: number }[];
+  scenarioId: SimulationScenarioId;
+  scenarioName: string;
+  assumptions: SimulationParameters;
+  outcomes: SimulationOutcome[];
+  methodology: string[];
+  limitations: string[];
+  keyResult: string;
 }
 
-export interface SavedScenario {
+export interface SimulationRun {
   id: string;
-  name: string;
-  scenarioId: string;
-  scenarioTitle: string;
-  parameters: Record<string, any>;
-  result: SimulationResult;
-  timestamp: number;
+  userId: string;
+  scenarioName: string;
+  parameters: SimulationParameters;
+  results: SimulationResult;
+  createdAt: string;
 }

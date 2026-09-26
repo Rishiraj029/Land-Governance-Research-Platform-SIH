@@ -4,13 +4,26 @@ import { X } from "lucide-react";
 interface AddNoteModalProps {
   onClose: () => void;
   onSubmit: (data: { title: string; content: string }) => void;
+  /** Pre-filled values, used when editing a note that already exists. */
+  initialTitle?: string;
+  initialContent?: string;
+  /** "edit" only changes the heading and the submit label. */
+  mode?: "create" | "edit";
 }
 
-export default function AddNoteModal({ onClose, onSubmit }: AddNoteModalProps) {
+export default function AddNoteModal({
+  onClose,
+  onSubmit,
+  initialTitle = "",
+  initialContent = "",
+  mode = "create"
+}: AddNoteModalProps) {
   const [formData, setFormData] = useState({
-    title: "",
-    content: ""
+    title: initialTitle,
+    content: initialContent
   });
+
+  const isEdit = mode === "edit";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,7 +34,9 @@ export default function AddNoteModal({ onClose, onSubmit }: AddNoteModalProps) {
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-6 border-b border-[#E1E5EA]">
-          <h2 className="text-xl font-semibold text-[#1F2933]">Add Research Note</h2>
+          <h2 className="text-xl font-semibold text-[#1F2933]">
+            {isEdit ? "Edit Research Note" : "Add Research Note"}
+          </h2>
           <button
             onClick={onClose}
             className="p-2 hover:bg-[#F5F7FA] rounded-full text-[#5A6472]"
@@ -77,7 +92,7 @@ export default function AddNoteModal({ onClose, onSubmit }: AddNoteModalProps) {
               type="submit"
               className="px-4 py-2 text-sm font-medium text-white bg-[#0B3D91] hover:bg-[#062A63] rounded-md transition-colors"
             >
-              Add Note
+              {isEdit ? "Save Changes" : "Add Note"}
             </button>
           </div>
         </form>

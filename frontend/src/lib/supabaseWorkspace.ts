@@ -227,11 +227,50 @@ export async function loadWorkspaces(userId: string): Promise<{ workspaces: Work
       return { workspaces: [], error: error.message };
     }
 
+    // Workspaces the user was invited to are not covered by the owner filter above. The
+    // workspaces SELECT policy already allows owners *and* members to read the row, so the
+    // member's workspace ids are resolved first and those rows are then fetched by id.
+    // A failure here only hides shared workspaces, so it never fails the owned list.
+    const ownedRows: any[] = data || [];
+    const ownedIds = new Set(ownedRows.map((row: any) => row.id));
+    let sharedRows: any[] = [];
+
+    const { data: memberships, error: membershipError } = await supabase
+      .from('workspace_members')
+      .select('workspace_id')
+      .eq('user_id', userId);
+
+    if (membershipError) {
+      console.error('Error loading workspace memberships:', membershipError);
+    }
+
+    const sharedIds = [
+      ...new Set((memberships || []).map((row: any) => row.workspace_id))
+    ].filter((workspaceId: any) => !ownedIds.has(workspaceId));
+
+    if (sharedIds.length > 0) {
+      const { data: shared, error: sharedError } = await supabase
+        .from('workspaces')
+        .select('*')
+        .in('id', sharedIds);
+
+      if (sharedError) {
+        console.error('Error loading shared workspaces:', sharedError);
+      } else {
+        sharedRows = shared || [];
+      }
+    }
+
+    // Newest first, matching the ordering of the owner query.
+    const rows = [...ownedRows, ...sharedRows].sort(
+      (a: any, b: any) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+
     // Owner profiles are fetched separately: owner_id references auth.users, there is no
     // workspaces -> profiles foreign key to embed.
-    const ownerNames = await loadProfileNames((data || []).map((w: any) => w.owner_id));
+    const ownerNames = await loadProfileNames(rows.map((row: any) => row.owner_id));
 
-    const workspaces = (data || []).map((row: any) => rowToWorkspace(row, ownerNames[row.owner_id]));
+    const workspaces = rows.map((row: any) => rowToWorkspace(row, ownerNames[row.owner_id]));
 
     // Load counts for each workspace
     const workspacesWithCounts = await Promise.all(
@@ -447,24 +486,48 @@ export async function addWorkspaceMember(
 }
 
 /**
- * Find user by email
+ * Find a registered user id by their profile full name.
+ *
+ * public.profiles has no email column — querying `profiles.email` fails with
+ * `42703 column profiles.email does not exist` — so an email -> uuid lookup is impossible
+ * from the client without a schema change. full_name is the human-readable identity column
+ * that loadProfileNames() already relies on, and it is what the workspace UI displays.
+ *
+ * `limit(2)` is used instead of `.single()` so "no match" and "ambiguous name" can be
+ * reported as distinct, user-facing messages instead of a PGRST116 error.
  */
-export async function findUserByEmail(email: string): Promise<{ userId: string | null; error: string | null }> {
+export async function findUserByProfileName(fullName: string): Promise<{ userId: string | null; error: string | null }> {
+  const name = fullName.trim();
+  if (!name) {
+    return { userId: null, error: 'Enter the member\'s registered full name' };
+  }
+
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id')
-      .eq('email', email)
-      .single();
+      .select('id, full_name')
+      .ilike('full_name', name)
+      .limit(2);
 
     if (error) {
-      console.error('Error finding user:', error);
+      console.error('Error finding user by profile name:', error);
       return { userId: null, error: error.message };
     }
 
-    return { userId: data?.id || null, error: null };
+    if (!data || data.length === 0) {
+      return { userId: null, error: 'No registered user found with that name' };
+    }
+
+    if (data.length > 1) {
+      return {
+        userId: null,
+        error: 'More than one registered user has that name, so the member is ambiguous'
+      };
+    }
+
+    return { userId: data[0].id, error: null };
   } catch (error) {
-    console.error('Unexpected error finding user:', error);
+    console.error('Unexpected error finding user by profile name:', error);
     return { userId: null, error: 'Failed to find user' };
   }
 }
@@ -640,7 +703,11 @@ export async function createResearchNote(
 }
 
 /**
- * Update a research note
+ * Update a research note.
+ *
+ * RLS only allows the note's author to update it, and a blocked UPDATE silently affects zero
+ * rows, so `.select()` is used to detect that case and return a real message instead of a
+ * misleading PGRST116 "no rows returned" error.
  */
 export async function updateResearchNote(
   noteId: string,
@@ -652,15 +719,18 @@ export async function updateResearchNote(
       .from('research_notes')
       .update({ title, content })
       .eq('id', noteId)
-      .select()
-      .single();
+      .select();
 
     if (error) {
       console.error('Error updating research note:', error);
       return { note: null, error: error.message };
     }
 
-    const note = rowToResearchNote(data as ResearchNoteRow);
+    if (!data || data.length === 0) {
+      return { note: null, error: 'Only the note author can edit this note' };
+    }
+
+    const note = rowToResearchNote(data[0] as ResearchNoteRow);
     return { note, error: null };
   } catch (error) {
     console.error('Unexpected error updating research note:', error);
@@ -669,18 +739,27 @@ export async function updateResearchNote(
 }
 
 /**
- * Delete a research note
+ * Delete a research note.
+ *
+ * RLS only allows the note's author to delete it, and a blocked DELETE silently affects zero
+ * rows, so `select('id')` is used to detect that case instead of reporting a false success
+ * (same pattern as removeWorkspaceDocument).
  */
 export async function deleteResearchNote(noteId: string): Promise<{ error: string | null }> {
   try {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('research_notes')
       .delete()
-      .eq('id', noteId);
+      .eq('id', noteId)
+      .select('id');
 
     if (error) {
       console.error('Error deleting research note:', error);
       return { error: error.message };
+    }
+
+    if (!data || data.length === 0) {
+      return { error: 'Only the note author can delete this note' };
     }
 
     return { error: null };

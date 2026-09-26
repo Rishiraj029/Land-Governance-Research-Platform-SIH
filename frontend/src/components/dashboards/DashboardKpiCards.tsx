@@ -1,151 +1,126 @@
 /**
- * DashboardKpiCards — KPI summary cards for the Dashboards Hub
- * Values are computed from the filtered dataset. Trend direction
- * is derived by comparing the selected or latest year to the previous year.
+ * DashboardKpiCards — KPI summary for the Dashboards Hub.
+ * Every number is computed from the rows currently in view
+ * (public.dashboard_indicators after filtering). Nothing is hardcoded.
  */
-import {
-  Database, AlertTriangle, FileText, MapPin,
-  Building2, Shield, CloudRain, CheckCircle,
-  TrendingUp, TrendingDown, Minus
-} from "lucide-react";
-import type { DashboardRecord, KPIDefinition } from "../../types/dashboard";
+import { Building2, CalendarDays, FileText, Globe, Sigma } from "lucide-react";
+import type { DashboardIndicator } from "../../types/dashboard";
+import { averageValue, formatMeasure, hasMixedUnits, singleUnit } from "../../lib/supabaseDashboards";
 
 interface Props {
-  kpis: KPIDefinition[];
-  records: DashboardRecord[];
-  selectedYear: string;
+  /** Rows matching the active filters. */
+  records: DashboardIndicator[];
+  /** Rows loaded from the database. */
+  totalRecords: number;
 }
 
-// ─────────────────────────────────────────────────
-// Render the correct Lucide icon by name string
-// ─────────────────────────────────────────────────
-function KPIIcon({ name, className }: { name: string; className?: string }) {
-  const cls = className ?? "h-5 w-5";
-  switch (name) {
-    case "Database": return <Database className={cls} />;
-    case "AlertTriangle": return <AlertTriangle className={cls} />;
-    case "FileText": return <FileText className={cls} />;
-    case "MapPin": return <MapPin className={cls} />;
-    case "Building2": return <Building2 className={cls} />;
-    case "Shield": return <Shield className={cls} />;
-    case "CloudRain": return <CloudRain className={cls} />;
-    case "CheckCircle": return <CheckCircle className={cls} />;
-    default: return <Database className={cls} />;
-  }
+interface KpiCard {
+  id: string;
+  label: string;
+  value: string;
+  /** Small unit/suffix shown next to the value. */
+  suffix?: string;
+  description: string;
+  icon: typeof FileText;
+  badge?: string;
 }
 
-// ─────────────────────────────────────────────────
-// Compute average of a set of values
-// ─────────────────────────────────────────────────
-function avg(values: number[]): number {
-  if (values.length === 0) return 0;
-  return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+function distinctCount(values: (string | null)[]): number {
+  return new Set(values.filter((value): value is string => Boolean(value))).size;
 }
 
-export default function DashboardKpiCards({ kpis, records, selectedYear }: Props) {
-  const YEARS = [2022, 2023, 2024, 2025, 2026];
+export default function DashboardKpiCards({ records, totalRecords }: Props) {
+  const years = records
+    .map((record) => record.year)
+    .filter((year): year is number => year !== null);
+  const latestYear = years.length > 0 ? Math.max(...years) : null;
 
-  const computeKPI = (kpi: KPIDefinition) => {
-    // Filter records matching this indicator
-    const matching = records.filter((r) => r.indicator === kpi.indicator);
+  const unitsAreMixed = hasMixedUnits(records);
+  const unit = unitsAreMixed ? null : singleUnit(records);
+  const mean = unitsAreMixed ? null : averageValue(records);
+  const valuedRows = records.filter((record) => record.value !== null).length;
 
-    // Determine the "current" year
-    const yearInt = selectedYear ? parseInt(selectedYear) : Math.max(...matching.map((r) => r.year), 2024);
-    const currentRecords = matching.filter((r) => r.year === yearInt);
-    const value = avg(currentRecords.map((r) => r.value));
-
-    // Determine the "previous" year
-    const prevYearIdx = YEARS.indexOf(yearInt) - 1;
-    const prevYear = prevYearIdx >= 0 ? YEARS[prevYearIdx] : null;
-    const prevRecords = prevYear ? matching.filter((r) => r.year === prevYear) : [];
-    const prevValue = avg(prevRecords.map((r) => r.value));
-
-    // Trend
-    let trend: "up" | "down" | "neutral" = "neutral";
-    if (prevValue > 0 && value !== prevValue) {
-      trend = value > prevValue ? "up" : "down";
-    }
-
-    // Pick a unit from records
-    const unit = currentRecords[0]?.unit ?? kpi.unit;
-
-    return { value, trend, prevValue, unit, hasData: currentRecords.length > 0 };
-  };
+  const cards: KpiCard[] = [
+    {
+      id: "records",
+      label: "Indicator records",
+      value: records.length.toLocaleString(),
+      description:
+        totalRecords > 0 && records.length !== totalRecords
+          ? `Matching filters, of ${totalRecords.toLocaleString()} loaded`
+          : "Rows currently loaded from the database",
+      icon: FileText,
+      badge: "in view",
+    },
+    {
+      id: "states",
+      label: "States represented",
+      value: distinctCount(records.map((record) => record.state)).toLocaleString(),
+      description: "Distinct states among the records in view",
+      icon: Globe,
+    },
+    {
+      id: "districts",
+      label: "Districts represented",
+      value: distinctCount(records.map((record) => record.district)).toLocaleString(),
+      description: "Distinct districts among the records in view",
+      icon: Building2,
+    },
+    {
+      id: "latest-year",
+      label: "Latest year",
+      value: latestYear === null ? "—" : String(latestYear),
+      description:
+        years.length === 0
+          ? "No year recorded on the rows in view"
+          : `Most recent year present${years.length > 1 ? ` (${Math.min(...years)}–${latestYear})` : ""}`,
+      icon: CalendarDays,
+    },
+    {
+      id: "average",
+      label: "Average value",
+      value: mean === null ? "—" : formatMeasure(mean),
+      suffix: mean === null ? undefined : (unit ?? undefined),
+      description:
+        mean === null
+          ? unitsAreMixed
+            ? "Not shown: the rows in view use different units"
+            : "No numeric values in view"
+          : `Mean of ${valuedRows} numerical ${valuedRows === 1 ? "record" : "records"}`,
+      icon: Sigma,
+    },
+  ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      {kpis.map((kpi) => {
-        const { value, trend, prevValue, unit, hasData } = computeKPI(kpi);
-        const isPositiveTrend =
-          (kpi.higherIsBetter && trend === "up") ||
-          (!kpi.higherIsBetter && trend === "down");
-        const isNegativeTrend =
-          (kpi.higherIsBetter && trend === "down") ||
-          (!kpi.higherIsBetter && trend === "up");
-
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      {cards.map((card) => {
+        const Icon = card.icon;
         return (
-          <div
-            key={kpi.id}
-            className="bg-white border border-[#E1E5EA] rounded-lg p-4 flex flex-col gap-3"
-          >
-            {/* Header */}
+          <div key={card.id} className="bg-white border border-[#E1E5EA] rounded-lg p-4 flex flex-col gap-3">
             <div className="flex items-start justify-between">
               <div className="p-2 bg-[#0B3D91]/10 rounded-lg">
-                <KPIIcon name={kpi.icon} className="h-5 w-5 text-[#0B3D91]" />
+                <Icon className="h-5 w-5 text-[#0B3D91]" />
               </div>
-              {/* Trend indicator */}
-              {trend !== "neutral" && hasData && (
-                <span
-                  className={`inline-flex items-center gap-0.5 text-xs font-medium px-1.5 py-0.5 rounded-full ${isPositiveTrend
-                      ? "bg-[#138808]/10 text-[#138808]"
-                      : isNegativeTrend
-                        ? "bg-[#D64545]/10 text-[#D64545]"
-                        : "bg-[#5A6472]/10 text-[#5A6472]"
-                    }`}
-                >
-                  {trend === "up" ? (
-                    <TrendingUp className="h-3 w-3" />
-                  ) : (
-                    <TrendingDown className="h-3 w-3" />
-                  )}
-                  vs prev. yr
-                </span>
-              )}
-              {trend === "neutral" && hasData && (
-                <span className="inline-flex items-center gap-0.5 text-xs font-medium px-1.5 py-0.5 rounded-full bg-[#5A6472]/10 text-[#5A6472]">
-                  <Minus className="h-3 w-3" />
-                  stable
+              {card.badge && (
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-[#5A6472] bg-[#F5F7FA] rounded px-1.5 py-0.5">
+                  {card.badge}
                 </span>
               )}
             </div>
 
-            {/* Value */}
             <div>
-              {hasData ? (
-                <>
-                  <p className="text-2xl font-bold text-[#1F2933]">
-                    {value.toLocaleString()}
-                    <span className="text-sm font-normal text-[#5A6472] ml-1">{unit}</span>
-                  </p>
-                  {prevValue > 0 && trend !== "neutral" && (
-                    <p className="text-xs text-[#5A6472] mt-0.5">
-                      Previous year: {prevValue.toLocaleString()} {unit}
-                    </p>
-                  )}
-                </>
-              ) : (
-                <p className="text-lg font-semibold text-[#5A6472]">—</p>
-              )}
+              <p className="text-2xl font-bold text-[#1F2933]">
+                {card.value}
+                {card.suffix && (
+                  <span className="text-sm font-normal text-[#5A6472] ml-1">{card.suffix}</span>
+                )}
+              </p>
             </div>
 
-            {/* Label */}
             <div>
-              <p className="text-sm font-medium text-[#1F2933]">{kpi.title}</p>
-              <p className="text-xs text-[#5A6472] mt-0.5 leading-relaxed">{kpi.description}</p>
+              <p className="text-sm font-medium text-[#1F2933]">{card.label}</p>
+              <p className="text-xs text-[#5A6472] mt-0.5 leading-relaxed">{card.description}</p>
             </div>
-
-            {/* Prototype label */}
-            <span className="text-xs text-[#E8A33D] font-medium">Prototype indicator</span>
           </div>
         );
       })}

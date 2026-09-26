@@ -4,13 +4,16 @@ import { MEMBER_PERMISSIONS } from "../../lib/mockWorkspaceData";
 
 interface InviteMemberModalProps {
   onClose: () => void;
-  onSubmit: (data: { name: string; email: string; role: string; permission: string }) => void;
+  onSubmit: (data: { name: string; role: string; permission: string }) => void;
 }
 
+/**
+ * Members are resolved against public.profiles by full name: neither public.profiles nor
+ * public.workspace_members has an email column, so an address cannot be looked up or stored.
+ */
 export default function InviteMemberModal({ onClose, onSubmit }: InviteMemberModalProps) {
   const [formData, setFormData] = useState({
     name: "",
-    email: "",
     role: "",
     permission: "Contributor"
   });
@@ -38,7 +41,7 @@ export default function InviteMemberModal({ onClose, onSubmit }: InviteMemberMod
           {/* Name */}
           <div>
             <label htmlFor="name" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Name <span className="text-red-500">*</span>
+              Registered name <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -47,24 +50,12 @@ export default function InviteMemberModal({ onClose, onSubmit }: InviteMemberMod
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="Enter member name"
+              placeholder="Enter the member's profile name"
             />
-          </div>
-
-          {/* Email */}
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-[#1F2933] mb-2">
-              Email <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="email"
-              id="email"
-              required
-              value={formData.email}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-              className="w-full rounded-md border border-[#E1E5EA] bg-white px-4 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]/20"
-              placeholder="Enter email address"
-            />
+            <p className="mt-1 text-xs text-[#5A6472]">
+              Must match the full name on their profile, e.g. "Anita Sharma". Workspace membership
+              is stored by profile, not by email address.
+            </p>
           </div>
 
           {/* Role */}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { X, Upload, FileText, Check, ArrowRight, AlertCircle, Loader2 } from "lucide-react";
 import type { ContentType, Theme, AccessTier } from "../../types/repository";
-import { CONTENT_TYPES, THEMES, STATES, ACCESS_TIERS } from "../../lib/mockRepositoryData";
+import { CONTENT_TYPES, THEMES, STATES, LANGUAGES, ACCESS_TIERS } from "../../lib/mockRepositoryData";
 import { uploadRepositoryDocument } from "../../lib/supabaseRepository";
 import { useAuth } from "../../hooks/useAuth";
 
@@ -11,6 +11,22 @@ interface UploadModalProps {
 }
 
 type UploadStep = 1 | 2 | 3 | 4;
+
+// Client-side guard rails for contributed files (the storage service still
+// enforces its own limits server-side).
+const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+const ALLOWED_EXTENSIONS = ["pdf", "docx", "csv", "shp", "tif", "tiff"];
+
+function validateFile(candidate: File): string | null {
+  const extension = candidate.name.split(".").pop()?.toLowerCase() ?? "";
+  if (!ALLOWED_EXTENSIONS.includes(extension)) {
+    return `Unsupported file type ".${extension}". Allowed formats: PDF, DOCX, CSV, Shapefile, GeoTIFF.`;
+  }
+  if (candidate.size > MAX_FILE_SIZE_BYTES) {
+    return `File is too large (${(candidate.size / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is 50 MB.`;
+  }
+  return null;
+}
 
 export default function UploadModal({ onClose, onUploadSuccess }: UploadModalProps) {
   const { user } = useAuth();
@@ -27,6 +43,7 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
   const [selectedTheme, setSelectedTheme] = useState<Theme | "">("");
   const [state, setState] = useState("");
   const [district, setDistrict] = useState("");
+  const [language, setLanguage] = useState("English");
   const [accessTier, setAccessTier] = useState<AccessTier>("Public");
 
   const handleFileDrop = (e: React.DragEvent) => {
@@ -34,13 +51,19 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
     setIsDragging(false);
     
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+      const droppedFile = e.dataTransfer.files[0];
+      const validationError = validateFile(droppedFile);
+      setUploadError(validationError);
+      setFile(validationError ? null : droppedFile);
     }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      const validationError = validateFile(selectedFile);
+      setUploadError(validationError);
+      setFile(validationError ? null : selectedFile);
     }
   };
 
@@ -84,7 +107,7 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
         state,
         district: district || undefined,
         accessTier,
-        language: "English",
+        language,
         author: user.user_metadata?.full_name || user.email?.split('@')[0] || "Unknown",
         institution: user.user_metadata?.institution || "Unknown",
         summary: description.substring(0, 200),
@@ -112,6 +135,7 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
     setSelectedTheme("");
     setState("");
     setDistrict("");
+    setLanguage("English");
     setAccessTier("Public");
     setCurrentStep(1);
   };
@@ -336,6 +360,21 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
 
               <div>
                 <label className="block text-sm font-medium text-[#1F2933] mb-2">
+                  Language *
+                </label>
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  className="w-full rounded-md border border-[#E1E5EA] bg-white px-3 py-2 text-sm text-[#1F2933] focus:border-[#0B3D91] focus:outline-none"
+                >
+                  {LANGUAGES.map(lang => (
+                    <option key={lang} value={lang}>{lang}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[#1F2933] mb-2">
                   Access Tier *
                 </label>
                 <div className="flex flex-wrap gap-2">
@@ -369,10 +408,10 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
                   <Check className="h-8 w-8 text-[#138808]" />
                 </div>
                 <h3 className="text-xl font-semibold text-[#1F2933] mb-2">
-                  Submission Under Review
+                  Document Published
                 </h3>
                 <p className="text-[#5A6472] max-w-md mx-auto">
-                  Your contribution has been submitted for moderation. It will be reviewed by platform administrators before becoming publicly searchable. You can track the status in your My Uploads section.
+                  Your document is now live in the Knowledge Repository and can be found through search and filters. You can open it any time from the Repository page.
                 </p>
               </div>
 
@@ -396,6 +435,10 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
                     <span className="ml-2 text-[#1F2933]">{state}</span>
                   </div>
                   <div>
+                    <span className="text-[#5A6472]">Language:</span>
+                    <span className="ml-2 text-[#1F2933]">{language}</span>
+                  </div>
+                  <div>
                     <span className="text-[#5A6472]">Access Tier:</span>
                     <span className="ml-2 text-[#1F2933]">{accessTier}</span>
                   </div>
@@ -407,7 +450,7 @@ export default function UploadModal({ onClose, onUploadSuccess }: UploadModalPro
                 <div className="text-sm">
                   <p className="font-medium text-[#1F2933]">What happens next?</p>
                   <p className="text-[#5A6472] mt-1">
-                    Your submission will be reviewed within 2-3 business days. You'll receive a notification when it's approved or if any changes are needed.
+                    Your document is published to the Knowledge Repository as soon as you submit it, and becomes searchable alongside the existing documents.
                   </p>
                 </div>
               </div>

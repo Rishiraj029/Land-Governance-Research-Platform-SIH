@@ -1,48 +1,39 @@
 /**
- * CategoryDistribution — donut/pie chart showing record count
- * (or average value) by dashboard category.
+ * CategoryDistribution — record count per category for the rows in view.
+ * Categories come from the data (public.dashboard_indicators.category).
  */
 import { useMemo } from "react";
-import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  Legend,
-} from "recharts";
-import type { DashboardRecord } from "../../types/dashboard";
-import { CATEGORY_COLORS, DASHBOARD_CATEGORIES } from "../../lib/mockDashboardIndicators";
+import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import type { DashboardIndicator } from "../../types/dashboard";
+import { paletteColor } from "../../lib/supabaseDashboards";
 
 interface Props {
-  records: DashboardRecord[];
+  /** Rows matching the active filters. */
+  records: DashboardIndicator[];
 }
 
-interface Slice {
-  name: string;
-  value: number;
-  color: string;
-}
+const UNCATEGORISED = "Uncategorised";
 
 export default function CategoryDistribution({ records }: Props) {
-  const slices = useMemo<Slice[]>(() => {
-    return DASHBOARD_CATEGORIES.map((cat) => ({
-      name: cat,
-      value: records.filter((r) => r.category === cat).length,
-      color: CATEGORY_COLORS[cat] ?? "#0B3D91",
-    })).filter((s) => s.value > 0);
+  const slices = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const record of records) {
+      const key = record.category ?? UNCATEGORISED;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([name, value]) => ({ name, value, color: paletteColor(name) }))
+      .sort((a, b) => b.value - a.value);
   }, [records]);
-
-  const hasData = slices.length > 0;
 
   return (
     <div className="bg-white border border-[#E1E5EA] rounded-lg p-4 h-full flex flex-col">
       <div className="mb-4">
         <h3 className="text-base font-semibold text-[#1F2933]">Category Distribution</h3>
-        <p className="text-xs text-[#5A6472]">Record count per dashboard category</p>
+        <p className="text-xs text-[#5A6472]">Record count per category in view</p>
       </div>
 
-      {hasData ? (
+      {slices.length > 0 ? (
         <div className="flex-1 w-full min-h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
@@ -67,23 +58,25 @@ export default function CategoryDistribution({ records }: Props) {
                   fontSize: 12,
                   color: "#1F2933",
                 }}
-                formatter={(value: any) => [`${value} records`, ""]}
+                formatter={(value) => [`${value} records`, ""]}
               />
               <Legend
                 wrapperStyle={{ fontSize: 11, color: "#5A6472", paddingTop: "20px" }}
-                formatter={(value: any) => String(value).length > 35 ? String(value).slice(0, 35) + "…" : value}
+                formatter={(value) =>
+                  String(value).length > 35 ? `${String(value).slice(0, 35)}…` : value
+                }
               />
             </PieChart>
           </ResponsiveContainer>
         </div>
       ) : (
         <div className="flex-1 flex items-center justify-center min-h-[300px] text-[#5A6472] text-sm">
-          No category data for current filters.
+          No category data for the current filters.
         </div>
       )}
 
       <p className="text-xs text-[#5A6472] mt-4">
-        Prototype data · Values are illustrative and not official government statistics.
+        Counts only — no values are combined across categories.
       </p>
     </div>
   );

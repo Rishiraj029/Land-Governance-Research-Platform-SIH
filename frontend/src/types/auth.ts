@@ -5,11 +5,27 @@ export const USER_ROLES = ["citizen", "researcher", "policymaker", "admin"] as c
 
 export type UserRole = (typeof USER_ROLES)[number];
 
-/** Row shape of public.profiles. The database trigger keeps it in sync with auth users. */
+/**
+ * Row shape of public.profiles. The database trigger keeps it in sync with auth users.
+ *
+ * Verified against the live schema: the table is exactly
+ * `id, full_name, role, institution, created_at, updated_at`. There is no email, avatar,
+ * phone, department or designation column, which is why the Settings page only ever
+ * edits full_name and institution.
+ */
 export interface Profile {
   id: string;
   full_name: string | null;
   role: UserRole;
+  institution: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** The subset of a profile a user is allowed to change about themselves. */
+export interface ProfileUpdateInput {
+  fullName: string;
+  institution: string;
 }
 
 /** Credentials accepted by the sign-in form. */

@@ -1,0 +1,16 @@
+﻿id => EXISTS (permission denied for anon)
+user_id => EXISTS (permission denied for anon)
+document_id => EXISTS (permission denied for anon)
+repository_document_id => ABSENT
+created_at => EXISTS (permission denied for anon)
+updated_at => ABSENT
+notes => ABSENT
+note => ABSENT
+title => ABSENT
+folder => ABSENT
+tags => ABSENT
+collection_id => ABSENT
+bookmark_type => ABSENT
+is_active => ABSENT
+deleted_at => ABSENT
+profile_id => ABSENT

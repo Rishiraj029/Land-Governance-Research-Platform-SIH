@@ -1,5 +1,6 @@
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
+import AdminRoute from "./components/auth/AdminRoute";
 import { AuthProvider } from "./hooks/useAuth";
 import Dashboard from "./pages/Dashboard";
 import Landing from "./pages/Landing";
@@ -67,7 +68,14 @@ export default function App() {
             <Route path="innovation" element={<InnovationSubmissions />} />
             <Route path="settings" element={<Settings />} />
             <Route path="department-data" element={<DepartmentData />} />
-            <Route path="admin" element={<AdminPanel />} />
+            <Route
+              path="admin"
+              element={
+                <AdminRoute>
+                  <AdminPanel />
+                </AdminRoute>
+              }
+            />
           </Route>
           <Route path="*" element={<Landing />} />
         </Routes>
