@@ -49,7 +49,7 @@ export function getAuthErrorMessage(error: unknown): string {
     if (error.code && AUTH_ERROR_MESSAGES[error.code]) {
       return AUTH_ERROR_MESSAGES[error.code];
     }
-    if (/fetch|network|timeout/i.test(error.message)) {
+    if (/fetch|network|timeout|abort/i.test(error.message)) {
       return NETWORK_MESSAGE;
     }
     if (error.status === 400 || error.status === 401) {
@@ -62,7 +62,7 @@ export function getAuthErrorMessage(error: unknown): string {
     return error.message || DEFAULT_MESSAGE;
   }
 
-  if (error instanceof Error && /fetch|network|timeout/i.test(error.message)) {
+  if (error instanceof Error && /fetch|network|timeout|abort/i.test(error.message)) {
     return NETWORK_MESSAGE;
   }
   return DEFAULT_MESSAGE;
@@ -73,8 +73,12 @@ export async function signIn({
   email,
   password,
 }: SignInCredentials): Promise<AuthActionResult> {
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  return { error: error ? getAuthErrorMessage(error) : null };
+  try {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    return { error: error ? getAuthErrorMessage(error) : null };
+  } catch (error) {
+    return { error: getAuthErrorMessage(error) };
+  }
 }
 
 /**

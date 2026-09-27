@@ -130,14 +130,19 @@ export default function Auth() {
     setError(null);
     setSubmitting(true);
 
-    const { error: authError } = await signIn({ email: loginEmail, password: loginPassword });
-    if (authError) {
-      setError(authError);
-      setSubmitting(false);
-      return;
-    }
+    try {
+      const { error: authError } = await signIn({ email: loginEmail, password: loginPassword });
+      if (authError) {
+        setError(authError);
+        return;
+      }
 
-    navigate(intendedPath, { replace: true, state: postAuthState });
+      navigate(intendedPath, { replace: true, state: postAuthState });
+    } catch {
+      setError("Unable to sign in right now. Please check your connection and try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleRegister(event: FormEvent<HTMLFormElement>) {
@@ -181,33 +186,26 @@ export default function Auth() {
     }
 
     if (needsEmailConfirmation) {
-      navigate("/auth", {
-        replace: true,
-        state: { 
-          notice: "Account created. Please confirm your email before signing in.",
-          tab: "login",
-          from: intendedPath,
-          createWorkspace: createWorkspaceIntent
-        },
-      });
-      return;
-    }
-
-    // For Government Official and Institution roles, show pending verification message
-    if (selectedRole === "official" || selectedRole === "institution") {
-      navigate("/auth", {
+      navigate("/", {
         replace: true,
         state: {
-          notice: "Account created successfully. Your account is pending verification. You can browse public content while elevated features are being reviewed.",
-          tab: "login",
-          from: intendedPath,
-          createWorkspace: createWorkspaceIntent
+          notice: "Your account was created. Please confirm your email before signing in. Check your inbox for the confirmation link.",
         },
       });
       return;
     }
 
-    navigate(intendedPath, { replace: true, state: postAuthState });
+    if (selectedRole === "official" || selectedRole === "institution") {
+      navigate("/", {
+        replace: true,
+        state: {
+          notice: "Your account is signed in. Elevated access is pending verification; you can browse public content in the meantime.",
+        },
+      });
+      return;
+    }
+
+    navigate("/", { replace: true });
   }
 
   function toggleAreaOfInterest(area: string) {

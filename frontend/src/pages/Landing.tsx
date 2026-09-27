@@ -1,4 +1,4 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useState, type CSSProperties, type FormEvent } from "react";
 import { Search, Map, GitBranch, Users, BarChart3, Lightbulb, FileText, ArrowRight, Calendar, Building2 } from "lucide-react";
 import "./Landing.css";
@@ -90,8 +90,16 @@ const PARTNERS = [
 
 /** Public entry point of the platform. */
 export default function Landing() {
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
+  const registrationNotice =
+    location.state !== null &&
+    typeof location.state === "object" &&
+    "notice" in location.state &&
+    typeof (location.state as { notice: unknown }).notice === "string"
+      ? (location.state as { notice: string }).notice
+      : null;
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -104,6 +112,12 @@ export default function Landing() {
       <Navbar />
       
       <main className="flex-1">
+        {registrationNotice && (
+          <div className="border-b border-[#138808]/20 bg-[#138808]/10 px-4 py-4 text-[#176B16]" role="status">
+            <p className="mx-auto max-w-7xl text-sm font-medium sm:px-2">{registrationNotice}</p>
+          </div>
+        )}
+
         {/* Hero Section */}
         <section className="relative overflow-hidden bg-gradient-to-br from-[#0B3D91] via-[#062A63] to-[#0B3D91]">
           {/* Satellite imagery background effect */}
