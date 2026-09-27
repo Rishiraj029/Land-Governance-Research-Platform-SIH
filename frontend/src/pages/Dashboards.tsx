@@ -39,6 +39,7 @@ import CategoryDistribution from "../components/dashboards/CategoryDistribution"
 import GeographicCoverage from "../components/dashboards/GeographicCoverage";
 import DashboardDataTable from "../components/dashboards/DashboardDataTable";
 import DashboardInfo from "../components/dashboards/DashboardInfo";
+import CompareStates from "../components/dashboards/CompareStates";
 import IndicatorDetailPanel from "../components/dashboards/IndicatorDetailPanel";
 
 export default function Dashboards() {
@@ -258,6 +259,12 @@ export default function Dashboards() {
                 <DashboardDataTable records={filteredRecords} onSelect={setSelected} />
               </div>
             )}
+
+            {/*
+              Compare States — reads the same loaded rows but keeps its own state/year
+              selection, so it stays usable even when the filters above match nothing.
+            */}
+            <CompareStates indicators={indicators} />
           </>
         )}
 

@@ -286,6 +286,181 @@ export function meanValueByState(
     .sort((a, b) => b.value - a.value);
 }
 
+// ─────────────────────────────────────────────────
+// State-to-state comparison (Compare States)
+// ─────────────────────────────────────────────────
+/**
+ * How a state figure was derived from the rows.
+ *
+ * `dashboard_indicators` stores some indicators for the whole state (district = "All") and
+ * others only per district. A statewide row is used as reported; when an indicator exists only
+ * for districts, the state figure is the mean of those district records and is labelled as such,
+ * so a district average is never presented as a statewide measurement.
+ */
+export type ComparisonBasis = 'statewide' | 'district-mean';
+
+/** One comparable figure: a single state, indicator and year. */
+export interface ComparisonValue {
+  indicatorName: string;
+  category: string | null;
+  value: number;
+  unit: string | null;
+  basis: ComparisonBasis;
+  /** Rows behind the figure (1 when a statewide row was used). */
+  recordCount: number;
+  /** Districts averaged for a district mean, alphabetically; empty for a statewide row. */
+  districts: string[];
+  source: string | null;
+  description: string | null;
+}
+
+/** Every indicator one state reports for one year. */
+export interface StateYearSummary {
+  state: string;
+  year: number;
+  values: ComparisonValue[];
+}
+
+/** One indicator both states report, with each state's own figure. */
+export interface StateComparisonRow {
+  indicatorName: string;
+  category: string | null;
+  unit: string | null;
+  a: ComparisonValue;
+  b: ComparisonValue;
+}
+
+export interface StateComparisonResult {
+  year: number;
+  a: StateYearSummary;
+  b: StateYearSummary;
+  /** Indicators present for both states, alphabetically — never ranked. */
+  shared: StateComparisonRow[];
+  /** Distinct units across the shared indicators, alphabetically. */
+  units: string[];
+}
+
+/** Years present in the rows, newest first. */
+export function listYears(rows: DashboardIndicator[]): number[] {
+  return [
+    ...new Set(rows.map((row) => row.year).filter((year): year is number => year !== null)),
+  ].sort((a, b) => b - a);
+}
+
+/** Years with at least one row for the given state, newest first. */
+export function yearsWithDataForState(rows: DashboardIndicator[], state: string): number[] {
+  return listYears(rows.filter((row) => row.state === state));
+}
+
+/** True when the row is recorded for the whole state rather than one district. */
+function isStatewideRow(row: DashboardIndicator): boolean {
+  return (row.district ?? '').trim().toLowerCase() === 'all';
+}
+
+/**
+ * One state's figures for one year.
+ *
+ * Rows without a usable number are skipped rather than treated as zero, and indicators with no
+ * name are ignored, so nothing here can invent a value the table does not contain.
+ */
+export function stateYearSummary(
+  rows: DashboardIndicator[],
+  state: string,
+  year: number,
+): StateYearSummary {
+  const rowsForStateYear = rows.filter(
+    (row) => row.state === state && row.year === year && row.value !== null && row.indicatorName,
+  );
+
+  const grouped = new Map<string, DashboardIndicator[]>();
+  for (const row of rowsForStateYear) {
+    const bucket = grouped.get(row.indicatorName);
+    if (bucket) bucket.push(row);
+    else grouped.set(row.indicatorName, [row]);
+  }
+
+  const values: ComparisonValue[] = [];
+  for (const [indicatorName, group] of grouped) {
+    const statewide = group.filter(isStatewideRow);
+    const contributing = statewide.length > 0 ? [statewide[0]] : group;
+    const numbers = contributing
+      .map((row) => row.value)
+      .filter((value): value is number => value !== null);
+    if (numbers.length === 0) continue;
+
+    const units = new Set(contributing.map((row) => row.unit ?? ''));
+    const unit = units.size === 1 ? ([...units][0] || null) : null;
+    const basis: ComparisonBasis = statewide.length > 0 ? 'statewide' : 'district-mean';
+
+    values.push({
+      indicatorName,
+      category: contributing.find((row) => row.category)?.category ?? null,
+      value: numbers.reduce((total, value) => total + value, 0) / numbers.length,
+      unit,
+      basis,
+      recordCount: contributing.length,
+      districts:
+        basis === 'district-mean' ? sortedUnique(contributing.map((row) => row.district)) : [],
+      source: contributing.find((row) => row.source)?.source ?? null,
+      description: contributing.find((row) => row.description)?.description ?? null,
+    });
+  }
+
+  values.sort((left, right) => left.indicatorName.localeCompare(right.indicatorName));
+  return { state, year, values };
+}
+
+/** Indicators both states report for the year, with each state's own figure. */
+export function compareStates(
+  rows: DashboardIndicator[],
+  stateA: string,
+  stateB: string,
+  year: number,
+): StateComparisonResult {
+  const a = stateYearSummary(rows, stateA, year);
+  const b = stateYearSummary(rows, stateB, year);
+  const bByName = new Map(b.values.map((value) => [value.indicatorName, value]));
+
+  const shared: StateComparisonRow[] = [];
+  for (const value of a.values) {
+    const counterpart = bByName.get(value.indicatorName);
+    if (!counterpart) continue;
+    shared.push({
+      indicatorName: value.indicatorName,
+      category: value.category ?? counterpart.category,
+      unit: value.unit ?? counterpart.unit,
+      a: value,
+      b: counterpart,
+    });
+  }
+  shared.sort((left, right) => left.indicatorName.localeCompare(right.indicatorName));
+
+  return { year, a, b, shared, units: sortedUnique(shared.map((row) => row.unit)) };
+}
+
+/**
+ * The unit covering the most rows — the default chart scale.
+ *
+ * Indicators are reported in different units (percent, index, cards…), and the dashboard never
+ * draws them on one axis. Charting the best-covered unit keeps the grouped bars comparable.
+ */
+export function dominantUnit(rows: { unit: string | null }[]): string {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.unit) continue;
+    counts.set(row.unit, (counts.get(row.unit) ?? 0) + 1);
+  }
+  let best = '';
+  let bestCount = -1;
+  for (const [unit, count] of [...counts.entries()].sort((x, y) => x[0].localeCompare(y[0]))) {
+    if (count > bestCount) {
+      best = unit;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
 /** Words the records use to describe themselves as non-official data. */
 const ILLUSTRATIVE_TERMS =
   /illustrat|indicative|prototype|demo|dummy|sample|mock|placeholder|hypothetical|not official/i;
