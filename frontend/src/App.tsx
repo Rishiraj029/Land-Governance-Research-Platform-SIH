@@ -30,11 +30,13 @@ import DepartmentData from "./pages/dashboard/DepartmentData";
 import AdminPanel from "./pages/dashboard/AdminPanel";
 
 export default function App() {
+  const hasAuthError = new URLSearchParams(window.location.hash.slice(1)).has("error_code");
+
   return (
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Landing />} />
+          <Route path="/" element={hasAuthError ? <Auth /> : <Landing />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/login" element={<Auth />} />
           <Route path="/signup" element={<Auth />} />

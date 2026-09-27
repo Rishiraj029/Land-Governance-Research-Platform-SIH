@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useMemo } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { 
   Search, 
   Filter, 
@@ -25,6 +25,7 @@ import {
   loadBookmarkedDocumentIds,
   addDocumentBookmark,
   removeDocumentBookmark,
+  searchRepositoryDocuments,
 } from "../lib/supabaseRepository";
 import type { 
   RepositoryFilters, 
@@ -38,13 +39,25 @@ import type {
 import { useAuth } from "../hooks/useAuth";
 import UploadModal from "../components/repository/UploadModal";
 import Toast from "../components/ui/Toast";
+import { gisResearchMatchLabel, readGisResearchContext } from "../lib/gisResearch";
 
 export default function Repository() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  
-  // Search and filter state
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  /*
+    GIS → Research. The GIS Explorer opens this page with the selected feature's metadata; the
+    query travels as the repository's existing `q` text search, so no second search system is
+    introduced. readGisResearchContext returns null for missing or unusable parameters, in which
+    case this page behaves exactly as before.
+  */
+  const gisContext = useMemo(() => readGisResearchContext(searchParams), [searchParams]);
+  const inGisContext = gisContext !== null;
+  const queryParam = searchParams.get("q") ?? "";
+
+  // Search and filter state — seeded from ?q= so a related-research link arrives pre-filled.
+  const [searchQuery, setSearchQuery] = useState(queryParam);
   const [sortBy, setSortBy] = useState<SortOption>("Relevance");
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [showMobileFilters, setShowMobileFilters] = useState(false);
@@ -74,6 +87,19 @@ export default function Repository() {
     accessTiers: [],
   });
 
+  /*
+    URL-driven state adjustment, not an effect: opening "View Related Research" on a second GIS
+    feature reuses this same component instance, so the new ?q= has to reach the search state.
+    Adjusting state during render is React's documented pattern for reacting to a changed input.
+  */
+  const [appliedQueryParam, setAppliedQueryParam] = useState(queryParam);
+  if (appliedQueryParam !== queryParam) {
+    setAppliedQueryParam(queryParam);
+    setSearchQuery(queryParam);
+    setCurrentPage(1);
+    setError(null);
+  }
+
   // Load documents from Supabase. Page 1 replaces the list, later pages append to it so
   // "Load more" keeps the documents that are already on screen.
   useEffect(() => {
@@ -83,19 +109,30 @@ export default function Repository() {
       setIsLoading(true);
       setError(null);
 
-      const result = await loadRepositoryDocuments(
-        filters,
-        searchQuery,
-        sortBy,
-        currentPage,
-        itemsPerPage
-      );
+      /*
+        One page, two existing loaders. A GIS feature's metadata is several separate field values
+        ("Land Records Digital Transformation Rajasthan Jodhpur"), and the repository's phrase
+        search would only ever match that exact string. So related-research arrivals use the
+        multi-term search the Search page already uses: it matches each term on its own and ranks
+        by how many terms a document covers, so partial metadata still finds documents instead of
+        returning nothing. Normal repository browsing is untouched.
+      */
+      const gisQuery = inGisContext ? searchQuery.trim() : "";
+      const result = gisQuery
+        ? await searchRepositoryDocuments(filters, gisQuery)
+        : await loadRepositoryDocuments(
+            filters,
+            searchQuery,
+            sortBy,
+            currentPage,
+            itemsPerPage
+          );
 
       if (!isCurrent) return;
 
       if (result.error) {
         setError(result.error);
-        if (currentPage === 1) {
+        if (currentPage === 1 || Boolean(gisQuery)) {
           setDocuments([]);
           setTotalCount(0);
         }
@@ -116,7 +153,7 @@ export default function Repository() {
     return () => {
       isCurrent = false;
     };
-  }, [filters, searchQuery, sortBy, currentPage, itemsPerPage, reloadKey]);
+  }, [filters, searchQuery, sortBy, currentPage, itemsPerPage, reloadKey, inGisContext]);
 
   // Load the signed-in user's saved documents from public.document_bookmarks so the
   // bookmark icons reflect what is actually stored in Supabase.
@@ -141,8 +178,8 @@ export default function Repository() {
     };
   }, [user, reloadKey]);
 
-  // Pagination
-  const totalPages = Math.ceil(totalCount / itemsPerPage);
+  // Pagination — the multi-term related-research search returns its ranked set in one batch.
+  const totalPages = inGisContext && searchQuery.trim() ? 1 : Math.ceil(totalCount / itemsPerPage);
   const paginatedDocuments = documents;
 
   // Filter handlers
@@ -174,6 +211,8 @@ export default function Repository() {
     setSearchQuery("");
     setCurrentPage(1);
     setError(null);
+    // Leaving the GIS context clears its parameters, so the Related Research banner goes away.
+    if (gisContext) setSearchParams(new URLSearchParams(), { replace: true });
   };
 
   const hasActiveFilters = Object.values(filters).some(
@@ -560,6 +599,34 @@ export default function Repository() {
 
             {/* Results Area */}
             <div className="flex-1">
+              {/* GIS → Research context, shown only when this page was opened from a map feature */}
+              {gisContext && (
+                <div className="mb-6 flex flex-col gap-3 rounded-lg border border-[#0B3D91]/20 bg-[#0B3D91]/5 p-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex items-start gap-3">
+                    <MapPin className="mt-0.5 h-5 w-5 shrink-0 text-[#0B3D91]" aria-hidden="true" />
+                    <div className="min-w-0">
+                      <h2 className="text-sm font-semibold text-[#1F2933]">Related Research</h2>
+                      <p className="mt-0.5 text-sm text-[#5A6472]">
+                        For: {gisContext.featureName}
+                        {gisContext.location ? ` — ${gisContext.location}` : ""}
+                      </p>
+                      {gisContext.matchedFields.length > 0 && (
+                        <p className="mt-1 text-xs text-[#5A6472]">
+                          Matched on: {gisResearchMatchLabel(gisContext.matchedFields)}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={clearAllFilters}
+                    className="self-start rounded-md border border-[#0B3D91] bg-white px-3 py-2 text-xs font-semibold text-[#0B3D91] hover:bg-[#0B3D91]/5"
+                  >
+                    Show all documents
+                  </button>
+                </div>
+              )}
+
               {/* Results Header */}
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
                 <div>
@@ -622,13 +689,19 @@ export default function Repository() {
               ) : paginatedDocuments.length === 0 ? (
                 <div className="text-center py-12">
                   <FileText className="h-12 w-12 text-[#5A6472] mx-auto mb-4" />
-                  <h3 className="text-lg font-semibold text-[#1F2933] mb-2">No results found</h3>
-                  <p className="text-[#5A6472] mb-4">Try adjusting your search or filters</p>
+                  <h3 className="text-lg font-semibold text-[#1F2933] mb-2">
+                    {gisContext ? "No related research documents found for this GIS feature." : "No results found"}
+                  </h3>
+                  <p className="text-[#5A6472] mb-4">
+                    {gisContext
+                      ? "The repository has no documents matching this feature's category, theme, state or district yet."
+                      : "Try adjusting your search or filters"}
+                  </p>
                   <button
                     onClick={clearAllFilters}
                     className="rounded-md bg-[#0B3D91] px-4 py-2 text-sm font-semibold text-white hover:bg-[#062A63]"
                   >
-                    Clear all filters
+                    {gisContext ? "Browse Repository" : "Clear all filters"}
                   </button>
                 </div>
               ) : (

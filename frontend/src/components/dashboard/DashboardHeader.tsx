@@ -1,14 +1,8 @@
 import { Link } from "react-router-dom";
 import { Menu, X, Bell, LogOut, Home } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
-import type { UserRole } from "../../types/auth";
-
-const ROLE_LABELS: Record<UserRole, string> = {
-  citizen: "Citizen",
-  researcher: "Verified Researcher",
-  policymaker: "Government Official",
-  admin: "Administrator",
-};
+import { useProfile } from "../../hooks/useProfile";
+import { getDashboardRoleLabel } from "./dashboardRoles";
 
 interface DashboardHeaderProps {
   onMobileMenuToggle: () => void;
@@ -17,11 +11,12 @@ interface DashboardHeaderProps {
 
 export default function DashboardHeader({ onMobileMenuToggle, showMobileMenu }: DashboardHeaderProps) {
   const { user, signOut } = useAuth();
-  
-  const fullName = typeof user?.user_metadata?.full_name === "string" ? user.user_metadata.full_name : null;
-  const appMetadataRole = typeof user?.app_metadata?.role === "string" ? user.app_metadata.role : null;
-  const userMetadataRole = typeof user?.user_metadata?.role === "string" ? user.user_metadata.role : null;
-  const role = (appMetadataRole ?? userMetadataRole) as UserRole | null;
+  // Role comes from public.profiles (see useProfile), never from client-editable metadata.
+  const { profile, role } = useProfile();
+
+  const metadataName = typeof user?.user_metadata?.full_name === "string" ? user.user_metadata.full_name : null;
+  const fullName = profile?.full_name ?? metadataName;
+  const roleName = getDashboardRoleLabel(role);
   const email = user?.email ?? "";
   const initials = (fullName?.trim() || email.trim() || "U")
     .split(/[\s@._-]+/)
@@ -53,8 +48,8 @@ export default function DashboardHeader({ onMobileMenuToggle, showMobileMenu }: 
         </span>
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-[#1F2933]">{fullName || "User"}</p>
-          {role && (
-            <p className="truncate text-xs text-[#138808]">{ROLE_LABELS[role] || role}</p>
+          {roleName && (
+            <p className="truncate text-xs text-[#138808]">{roleName}</p>
           )}
         </div>
       </div>

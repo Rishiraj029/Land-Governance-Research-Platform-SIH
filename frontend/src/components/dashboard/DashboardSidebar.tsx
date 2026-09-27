@@ -2,8 +2,8 @@ import { Link, useLocation } from "react-router-dom";
 import { Landmark, LogOut } from "lucide-react";
 import { useAuth } from "../../hooks/useAuth";
 import { useProfile } from "../../hooks/useProfile";
-import { ROLE_LABELS } from "../../lib/roles";
 import { PLATFORM_NAV_ITEMS, getDashboardNavItems } from "./dashboardNav";
+import { getDashboardRoleLabel } from "./dashboardRoles";
 
 export default function DashboardSidebar() {
   const location = useLocation();
@@ -20,6 +20,9 @@ export default function DashboardSidebar() {
     .slice(0, 2)
     .map((part) => part[0])
     .join("").toUpperCase();
+
+  // Dashboard-facing label, so the sidebar agrees with the header and the overview heading.
+  const roleName = getDashboardRoleLabel(role);
 
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + "/");
 
@@ -52,9 +55,9 @@ export default function DashboardSidebar() {
               {fullName || "User"}
             </p>
             <p className="text-xs text-[#5A6472] truncate">{email}</p>
-            {role && (
+            {roleName && (
               <span className="inline-flex items-center text-xs font-medium text-[#138808]">
-                {ROLE_LABELS[role] || role}
+                {roleName}
               </span>
             )}
             {profile?.institution && (

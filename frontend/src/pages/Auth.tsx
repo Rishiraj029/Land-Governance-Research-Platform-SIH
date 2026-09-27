@@ -1,7 +1,7 @@
 import { useState, useEffect, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Landmark, Eye, EyeOff, Shield, Building2, Users, User } from "lucide-react";
-import { signIn, signUp } from "../services/authService";
+import { resendSignupConfirmation, signIn, signUp } from "../services/authService";
 
 type AuthTab = "login" | "register";
 type UserRole = "researcher" | "official" | "institution" | "public";
@@ -79,6 +79,7 @@ export default function Auth() {
 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [resendingConfirmation, setResendingConfirmation] = useState(false);
 
   // Rotate use cases
   useEffect(() => {
@@ -94,6 +95,25 @@ export default function Auth() {
       setActiveTab((location.state as { tab: AuthTab }).tab);
     }
   }, [location.state]);
+
+  useEffect(() => {
+    const callbackParams = new URLSearchParams(window.location.hash.slice(1));
+    const errorCode = callbackParams.get("error_code");
+    if (!errorCode) return;
+
+    setActiveTab("login");
+    setError(
+      errorCode === "otp_expired"
+        ? "This confirmation link has expired. Enter your email below and request a new link."
+        : "This confirmation link could not be verified. Enter your email below and request a new link.",
+    );
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${window.location.search}`,
+    );
+    navigate("/login", { replace: true });
+  }, [navigate]);
 
   // Set by Signup when the account was created but email confirmation is required.
   const notice =
@@ -143,6 +163,23 @@ export default function Auth() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleResendConfirmation() {
+    const email = loginEmail.trim();
+    if (!email) {
+      setError("Enter your email address first, then request a new confirmation link.");
+      return;
+    }
+
+    setError(null);
+    setResendingConfirmation(true);
+    const { error: resendError } = await resendSignupConfirmation(email);
+    setError(
+      resendError ??
+        "If an unconfirmed account exists for this email, a new confirmation link has been sent.",
+    );
+    setResendingConfirmation(false);
   }
 
   async function handleRegister(event: FormEvent<HTMLFormElement>) {
@@ -345,6 +382,15 @@ export default function Auth() {
                         placeholder="you@example.com"
                       />
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={handleResendConfirmation}
+                      disabled={resendingConfirmation}
+                      className="text-sm text-[#0B3D91] hover:text-[#FF9933] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {resendingConfirmation ? "Sending confirmation link…" : "Resend confirmation email"}
+                    </button>
 
                     <div className="space-y-1.5">
                       <label

@@ -11,7 +11,11 @@ import PendingItems from "../components/dashboard/PendingItems";
 import { useAuth } from "../hooks/useAuth";
 import { useProfile } from "../hooks/useProfile";
 import { loadDashboardOverview, type DashboardOverview } from "../lib/supabaseDashboard";
-import { roleLabel } from "../lib/roles";
+import {
+  getDashboardRoleLabel,
+  getDashboardRoleView,
+  metricEmphasisRank,
+} from "../components/dashboard/dashboardRoles";
 
 /**
  * Signed-in area shell.
@@ -37,7 +41,11 @@ export default function Dashboard() {
     .map((part) => part[0])
     .join("")
     .toUpperCase();
-  const roleName = roleLabel(role);
+  const roleName = getDashboardRoleLabel(role);
+
+  // Role-aware presentation only. A null view (role not loaded yet) keeps the generic
+  // dashboard the platform already showed, rather than assuming any particular role.
+  const roleView = getDashboardRoleView(role);
 
   const isOverview = location.pathname === "/dashboard";
 
@@ -67,6 +75,12 @@ export default function Dashboard() {
   }
 
   const navItems = getDashboardNavItems(role);
+
+  // Existing metric cards, led by the ones this role uses most. Sorting is stable, so cards
+  // outside the role's emphasised set keep their current order instead of disappearing.
+  const orderedMetrics = [...(overview?.metrics ?? [])].sort(
+    (a, b) => metricEmphasisRank(roleView, a.key) - metricEmphasisRank(roleView, b.key),
+  );
 
   return (
     <div className="flex min-h-screen flex-col bg-[#F5F7FA] lg:flex-row">
@@ -164,8 +178,13 @@ export default function Dashboard() {
               <h1 className="text-2xl font-bold text-[#1F2933]">
                 {displayName ? `Welcome back, ${displayName}` : "Welcome back"}
               </h1>
+              {roleView && (
+                <p className="mt-1 text-lg font-semibold text-[#0B3D91]">{roleView.heading}</p>
+              )}
               <p className="mt-1 text-[#5A6472]">
-                Your personalized research and policy workspace for land governance innovation
+                {roleView
+                  ? roleView.subtitle
+                  : "Your personalized research and policy workspace for land governance innovation"}
               </p>
               {(roleName || profile?.institution) && (
                 <p className="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -197,8 +216,34 @@ export default function Dashboard() {
               </div>
             )}
 
+            {/* Role-aware quick actions — links to existing pages only */}
+            {roleView && (
+              <div>
+                <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#5A6472]">
+                  Quick actions
+                </h2>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {roleView.quickActions.map((action) => {
+                    const Icon = action.icon;
+                    return (
+                      <Link
+                        key={`${action.name}-${action.path}`}
+                        to={action.path}
+                        className="flex items-center gap-3 rounded-lg border border-[#E1E5EA] bg-white p-4 text-sm font-medium text-[#1F2933] shadow-sm transition-colors hover:border-[#0B3D91] hover:text-[#0B3D91] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0B3D91]"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0B3D91]/10">
+                          <Icon className="h-5 w-5 text-[#0B3D91]" aria-hidden="true" />
+                        </span>
+                        {action.name}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* Stats Cards */}
-            <StatsCards metrics={overview?.metrics ?? []} loading={loadingOverview} />
+            <StatsCards metrics={orderedMetrics} loading={loadingOverview} />
 
             {/* Recent Activity */}
             <RecentActivity items={overview?.recentItems ?? []} loading={loadingOverview} />

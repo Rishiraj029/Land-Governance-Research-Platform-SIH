@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from "react-l
 import { 
   Layers, 
   Search, 
+  BookOpen,
   X, 
   Filter, 
   Map as MapIcon, 
@@ -31,6 +32,7 @@ import type { Feature, FeatureCollection } from "geojson";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
 import { loadGisFeatures } from "../lib/supabaseGis";
+import { buildGisResearchUrl } from "../lib/gisResearch";
 import type { GISFeature, GISLayer, GISFilters, GISDatasetInfo } from "../types/gis";
 
 /**
@@ -1102,6 +1104,18 @@ export default function GISExplorer() {
                           <p><strong>Location:</strong> {[feature.district, feature.state].filter(Boolean).join(", ")}</p>
                           <p><strong>Dataset:</strong> {feature.datasetName || "Not specified"}</p>
                         </div>
+                        {/*
+                          GIS → Research. Uses the repository's existing text search with this
+                          feature's category / theme / state / district; the repository shows
+                          the context and its own empty state when nothing matches.
+                        */}
+                        <Link
+                          to={buildGisResearchUrl(feature)}
+                          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0B3D91] px-3 py-2 text-xs font-semibold text-white hover:bg-[#062A63]"
+                        >
+                          <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                          View Related Research
+                        </Link>
                       </div>
                     </Popup>
                   </Marker>
@@ -1273,7 +1287,14 @@ export default function GISExplorer() {
                   )}
                 </div>
 
-                <div className="pt-4 border-t border-[#E1E5EA]">
+                <div className="pt-4 border-t border-[#E1E5EA] space-y-3">
+                  <Link
+                    to={buildGisResearchUrl(selectedFeature)}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md border border-[#0B3D91] bg-white text-[#0B3D91] text-sm font-medium hover:bg-[#0B3D91]/5"
+                  >
+                    <BookOpen className="h-4 w-4" />
+                    View Related Research
+                  </Link>
                   <button
                     onClick={() => zoomToFeature(selectedFeature)}
                     className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-[#0B3D91] text-white text-sm font-medium hover:bg-[#062A63]"
@@ -1322,6 +1343,13 @@ export default function GISExplorer() {
                       <p className="text-[#1F2933]">{selectedFeature.theme}</p>
                     </div>
                   </div>
+                  <Link
+                    to={buildGisResearchUrl(selectedFeature)}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-md bg-[#0B3D91] text-white text-sm font-medium hover:bg-[#062A63]"
+                  >
+                    <BookOpen className="h-4 w-4" />
+                    View Related Research
+                  </Link>
                 </div>
               </div>
             </div>

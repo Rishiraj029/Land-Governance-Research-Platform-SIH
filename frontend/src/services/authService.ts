@@ -98,6 +98,7 @@ export async function signUp({
       data: {
         full_name: fullName,
       },
+      emailRedirectTo: window.location.origin,
     },
   });
 
@@ -107,6 +108,20 @@ export async function signUp({
 
   // No session means the Supabase project requires email confirmation first.
   return { error: null, needsEmailConfirmation: data.session === null };
+}
+
+/** Sends a fresh confirmation link to an unconfirmed signup. */
+export async function resendSignupConfirmation(email: string): Promise<AuthActionResult> {
+  try {
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    return { error: error ? getAuthErrorMessage(error) : null };
+  } catch (error) {
+    return { error: getAuthErrorMessage(error) };
+  }
 }
 
 /** Signs the current user out. */
