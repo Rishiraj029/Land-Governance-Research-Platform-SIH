@@ -532,3 +532,311 @@ export function formatMeasure(value: number | null): string {
     ? Math.round(value).toLocaleString()
     : Number(value.toFixed(2)).toLocaleString();
 }
+
+// ─────────────────────────────────────────────────
+// Risk Signals Analysis (Land Governance Risk Signals)
+// ─────────────────────────────────────────────────
+
+/**
+ * Trend types for risk signal analysis.
+ * These are rule-based classifications, not predictions.
+ */
+export type TrendType = 'increasing' | 'decreasing' | 'stable' | 'unusual-change' | 'insufficient-data';
+
+/**
+ * A single risk signal for a geography-indicator combination.
+ */
+export interface RiskSignal {
+  /** Geography (state or state + district) */
+  geography: string;
+  /** Indicator name */
+  indicator: string;
+  /** Rule-based trend classification */
+  trend: TrendType;
+  /** Time period covered by the analysis (e.g., "2021–2023") */
+  period: string;
+  /** Underlying data points used for the analysis */
+  dataPoints: Array<{ year: number; value: number; unit: string | null }>;
+  /** Data source from the original records */
+  source: string | null;
+  /** Data quality/confidence note */
+  confidenceNote: string;
+  /** Category of the indicator */
+  category: string | null;
+}
+
+/**
+ * A single risk signal for a geography-indicator combination.
+ */
+export interface RiskSignal {
+  /** Geography (state or state + district) */
+  geography: string;
+  /** Indicator name */
+  indicator: string;
+  /** Rule-based trend classification */
+  trend: TrendType;
+  /** Time period covered by the analysis (e.g., "2021–2023") */
+  period: string;
+  /** Underlying data points used for the analysis */
+  dataPoints: Array<{ year: number; value: number; unit: string | null }>;
+  /** Data source from the original records */
+  source: string | null;
+  /** Data quality/confidence note */
+  confidenceNote: string;
+  /** Category of the indicator */
+  category: string | null;
+}
+
+/**
+ * Minimum number of data points required for trend analysis.
+ */
+const MIN_DATA_POINTS = 3;
+
+/**
+ * Threshold for considering a change "unusual" (percentage change).
+ * If the year-over-year change exceeds this percentage, it's flagged as unusual.
+ */
+const UNUSUAL_CHANGE_THRESHOLD = 0.5; // 50% change
+
+/**
+ * Threshold for considering a trend "stable" (coefficient of variation).
+ * If the coefficient of variation is below this, the trend is considered stable.
+ */
+const STABLE_TREND_THRESHOLD = 0.1; // 10% coefficient of variation
+
+/**
+ * Calculate the coefficient of variation (CV) for a set of values.
+ * CV = standard deviation / mean. Lower CV indicates more stable values.
+ */
+function calculateCoefficientOfVariation(values: number[]): number {
+  if (values.length === 0) return 0;
+  const mean = values.reduce((sum, val) => sum + val, 0) / values.length;
+  if (mean === 0) return 0;
+  const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length;
+  const stdDev = Math.sqrt(variance);
+  return stdDev / Math.abs(mean);
+}
+
+/**
+ * Calculate the average year-over-year percentage change.
+ */
+function calculateAverageYearOverYearChange(values: number[]): number {
+  if (values.length < 2) return 0;
+  let totalChange = 0;
+  let changeCount = 0;
+  
+  for (let i = 1; i < values.length; i++) {
+    const prevValue = values[i - 1];
+    const currValue = values[i];
+    if (prevValue !== 0) {
+      const change = (currValue - prevValue) / Math.abs(prevValue);
+      totalChange += change;
+      changeCount++;
+    }
+  }
+  
+  return changeCount > 0 ? totalChange / changeCount : 0;
+}
+
+/**
+ * Detect unusual large recent changes in the data.
+ * Returns true if the most recent year-over-year change exceeds the threshold.
+ */
+function hasUnusualRecentChange(values: number[]): boolean {
+  if (values.length < 2) return false;
+  const lastIndex = values.length - 1;
+  const prevValue = values[lastIndex - 1];
+  const currValue = values[lastIndex];
+  
+  if (prevValue === 0) return false;
+  const change = Math.abs((currValue - prevValue) / Math.abs(prevValue));
+  return change > UNUSUAL_CHANGE_THRESHOLD;
+}
+
+/**
+ * Classify the trend type based on the data values.
+ * Uses simple rule-based logic, not machine learning.
+ */
+function classifyTrend(values: number[]): TrendType {
+  if (values.length < MIN_DATA_POINTS) {
+    return 'insufficient-data';
+  }
+  
+  // Check for unusual recent change first
+  if (hasUnusualRecentChange(values)) {
+    return 'unusual-change';
+  }
+  
+  // Check if trend is stable
+  const cv = calculateCoefficientOfVariation(values);
+  if (cv < STABLE_TREND_THRESHOLD) {
+    return 'stable';
+  }
+  
+  // Check if increasing or decreasing
+  const avgChange = calculateAverageYearOverYearChange(values);
+  if (avgChange > 0.05) { // More than 5% average increase
+    return 'increasing';
+  } else if (avgChange < -0.05) { // More than 5% average decrease
+    return 'decreasing';
+  }
+  
+  // Default to stable if changes are small
+  return 'stable';
+}
+
+/**
+ * Generate risk signals for all geography-indicator combinations in the dataset.
+ * Returns signals sorted by geography and indicator name.
+ */
+export function generateRiskSignals(indicators: DashboardIndicator[]): RiskSignal[] {
+  const signals: RiskSignal[] = [];
+  
+  // Group indicators by geography and indicator name
+  const groups = new Map<string, DashboardIndicator[]>();
+  
+  for (const indicator of indicators) {
+    if (indicator.value === null || !indicator.indicatorName) continue;
+    
+    // Create a unique key for geography + indicator
+    const geography = indicator.state || 'Unknown';
+    const district = indicator.district ? `, ${indicator.district}` : '';
+    const key = `${geography}${district}::${indicator.indicatorName}`;
+    
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key)!.push(indicator);
+  }
+  
+  // Analyze each group
+  for (const [key, group] of groups) {
+    if (group.length < MIN_DATA_POINTS) {
+      // Still create a signal with insufficient data
+      const [geography, indicator] = key.split('::');
+      const sortedGroup = [...group].sort((a, b) => (a.year || 0) - (b.year || 0));
+      const dataPoints = sortedGroup.map(row => ({
+        year: row.year || 0,
+        value: row.value || 0,
+        unit: row.unit
+      }));
+      
+      signals.push({
+        geography,
+        indicator,
+        trend: 'insufficient-data',
+        period: dataPoints.length > 0 
+          ? `${Math.min(...dataPoints.map(d => d.year))}–${Math.max(...dataPoints.map(d => d.year))}`
+          : 'No data',
+        dataPoints,
+        source: group[0].source,
+        confidenceNote: `Insufficient data: only ${group.length} data point(s) available. Minimum ${MIN_DATA_POINTS} required for trend analysis.`,
+        category: group[0].category
+      });
+      continue;
+    }
+    
+    // Sort by year
+    const sortedGroup = [...group].sort((a, b) => (a.year || 0) - (b.year || 0));
+    
+    // Extract values for analysis
+    const values = sortedGroup.map(row => row.value || 0);
+    const dataPoints = sortedGroup.map(row => ({
+      year: row.year || 0,
+      value: row.value || 0,
+      unit: row.unit
+    }));
+    
+    const [geography, indicator] = key.split('::');
+    const trend = classifyTrend(values);
+    const years = dataPoints.map(d => d.year);
+    const period = `${Math.min(...years)}–${Math.max(...years)}`;
+    
+    // Determine confidence note based on data quality
+    let confidenceNote = 'Adequate data for trend analysis.';
+    if (values.some(v => v < 0)) {
+      confidenceNote += ' Note: Some values are negative.';
+    }
+    if (new Set(sortedGroup.map(row => row.unit)).size > 1) {
+      confidenceNote += ' Warning: Mixed units detected in data series.';
+    }
+    
+    signals.push({
+      geography,
+      indicator,
+      trend,
+      period,
+      dataPoints,
+      source: group[0].source,
+      confidenceNote,
+      category: group[0].category
+    });
+  }
+  
+  // Sort by geography, then by indicator name
+  return signals.sort((a, b) => {
+    const geoCompare = a.geography.localeCompare(b.geography);
+    if (geoCompare !== 0) return geoCompare;
+    return a.indicator.localeCompare(b.indicator);
+  });
+}
+
+/**
+ * Get trend icon component name based on trend type.
+ */
+export function getTrendIcon(trend: TrendType): string {
+  switch (trend) {
+    case 'increasing':
+      return 'TrendingUp';
+    case 'decreasing':
+      return 'TrendingDown';
+    case 'stable':
+      return 'Minus';
+    case 'unusual-change':
+      return 'AlertTriangle';
+    case 'insufficient-data':
+      return 'HelpCircle';
+    default:
+      return 'Minus';
+  }
+}
+
+/**
+ * Get trend display label with emoji.
+ */
+export function getTrendLabel(trend: TrendType): string {
+  switch (trend) {
+    case 'increasing':
+      return '↑ Increasing trend';
+    case 'decreasing':
+      return '↓ Decreasing trend';
+    case 'stable':
+      return '→ Stable trend';
+    case 'unusual-change':
+      return '⚠ Unusual change';
+    case 'insufficient-data':
+      return '○ Insufficient data';
+    default:
+      return 'Unknown';
+  }
+}
+
+/**
+ * Get trend color class for styling.
+ */
+export function getTrendColor(trend: TrendType): string {
+  switch (trend) {
+    case 'increasing':
+      return 'text-[#D64545] bg-[#D64545]/10'; // Red for concerning increases
+    case 'decreasing':
+      return 'text-[#138808] bg-[#138808]/10'; // Green for positive decreases
+    case 'stable':
+      return 'text-[#0B3D91] bg-[#0B3D91]/10'; // Blue for stable
+    case 'unusual-change':
+      return 'text-[#FF9933] bg-[#FF9933]/10'; // Orange for unusual
+    case 'insufficient-data':
+      return 'text-[#5A6472] bg-[#5A6472]/10'; // Gray for insufficient
+    default:
+      return 'text-[#5A6472] bg-[#5A6472]/10';
+  }
+}

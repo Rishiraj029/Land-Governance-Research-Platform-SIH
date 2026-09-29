@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useState, type CSSProperties, type FormEvent } from "react";
-import { Search, Map, GitBranch, Users, BarChart3, Lightbulb, FileText, ArrowRight, Calendar, Building2 } from "lucide-react";
+import { Search, Map, GitBranch, Users, BarChart3, Lightbulb, FileText, ArrowRight, Calendar, Building2, Network } from "lucide-react";
 import "./Landing.css";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
@@ -43,6 +43,12 @@ const FEATURES = [
     title: "Track Programme Performance",
     description: "Real-time dashboards monitoring land governance KPIs and policy effectiveness",
     path: "/dashboards",
+  },
+  {
+    icon: Network,
+    title: "Explore Cross-Domain Insights",
+    description: "Discover relationships between land-governance domains using interactive analysis tools",
+    path: "/cross-domain-insights",
   },
   {
     icon: Lightbulb,

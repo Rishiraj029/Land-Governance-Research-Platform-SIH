@@ -21,7 +21,8 @@ import {
   AlertCircle,
   Loader2,
   ExternalLink,
-  Sparkles
+  Sparkles,
+  ClipboardList,
 } from "lucide-react";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
@@ -39,6 +40,7 @@ import { useAuth } from "../hooks/useAuth";
 import type { RepositoryDocument, ContentType } from "../types/repository";
 import Toast from "../components/ui/Toast";
 import AddToWorkspaceModal from "../components/repository/AddToWorkspaceModal";
+import PolicyProposalWorkspace from "../components/repository/PolicyProposalWorkspace";
 
 /** The AI analyses offered for a single repository document. */
 type DocumentAiAction = "summarize" | "related" | "compare" | "ask";
@@ -75,6 +77,7 @@ export default function DocumentDetail() {
   const [documentUrl, setDocumentUrl] = useState<string | null>(null);
   const [fileUnreachable, setFileUnreachable] = useState(false);
   const [showWorkspaceModal, setShowWorkspaceModal] = useState(false);
+  const [showPolicyProposal, setShowPolicyProposal] = useState(false);
 
   // --- AI document analysis (Gemini, proxied through the backend) ---
   const [aiLoading, setAiLoading] = useState(false);
@@ -613,6 +616,14 @@ export default function DocumentDetail() {
               {/* Action Bar */}
               <div className="flex flex-wrap items-center gap-2">
                 <button
+                  type="button"
+                  onClick={() => setShowPolicyProposal(true)}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[#0B3D91] bg-white px-3 py-2 text-sm font-semibold text-[#0B3D91] hover:bg-[#F0F5FC] focus:outline-none focus:ring-2 focus:ring-[#0B3D91]"
+                >
+                  <ClipboardList className="h-4 w-4" aria-hidden="true" />
+                  Convert to Policy Proposal
+                </button>
+                <button
                   onClick={toggleBookmark}
                   className={`p-2 rounded-md border ${bookmarked ? "border-[#FF9933] text-[#FF9933] bg-[#FF9933]/10" : "border-[#E1E5EA] text-[#5A6472] hover:bg-[#F5F7FA]"}`}
                   title="Bookmark"
@@ -1081,6 +1092,14 @@ export default function DocumentDetail() {
       </main>
 
       <Footer />
+
+      {showPolicyProposal && document && (
+        <PolicyProposalWorkspace
+          key={document.id}
+          document={document}
+          onClose={() => setShowPolicyProposal(false)}
+        />
+      )}
 
       {showWorkspaceModal && document && (
         <AddToWorkspaceModal

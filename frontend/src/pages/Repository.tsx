@@ -76,16 +76,19 @@ export default function Repository() {
   // Bumping this key re-runs the loader (used by "Try again" and after a successful upload).
   const [reloadKey, setReloadKey] = useState(0);
   
-  // Filter state
-  const [filters, setFilters] = useState<RepositoryFilters>({
+  // Filter state — seeded from ?themes= and ?state= so a cross-domain insight link
+  // arrives with the repository already filtered to that domain's records.
+  const themeParam = searchParams.get("themes") ?? "";
+  const stateParam = searchParams.get("state") ?? "";
+  const [filters, setFilters] = useState<RepositoryFilters>(() => ({
     contentTypes: [],
-    themes: [],
-    states: [],
+    themes: THEMES.includes(themeParam as Theme) ? [themeParam as Theme] : [],
+    states: stateParam ? [stateParam] : [],
     districts: [],
     dateRange: { from: "", to: "" },
     languages: [],
     accessTiers: [],
-  });
+  }));
 
   /*
     URL-driven state adjustment, not an effect: opening "View Related Research" on a second GIS

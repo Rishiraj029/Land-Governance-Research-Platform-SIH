@@ -20,6 +20,7 @@ import ApiPortal from "./pages/ApiPortal";
 import Workspaces from "./pages/Workspaces";
 import WorkspaceDetail from "./pages/WorkspaceDetail";
 import SearchResults from "./pages/SearchResults";
+import CrossDomainInsights from "./pages/CrossDomainInsights";
 import MyUploads from "./pages/dashboard/MyUploads";
 import MyWorkspaces from "./pages/dashboard/MyWorkspaces";
 import SavedSearches from "./pages/dashboard/SavedSearches";
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="/repository/:id" element={<DocumentDetail />} />
           <Route path="/gis-explorer" element={<GISExplorer />} />
           <Route path="/dashboards" element={<Dashboards />} />
+          <Route path="/cross-domain-insights" element={<CrossDomainInsights />} />
           <Route path="/simulation-lab" element={<SimulationLab />} />
           <Route path="/innovation-portal" element={<InnovationPortal />} />
           <Route path="/workspaces" element={<Workspaces />} />

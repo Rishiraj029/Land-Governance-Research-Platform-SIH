@@ -41,6 +41,7 @@ import DashboardDataTable from "../components/dashboards/DashboardDataTable";
 import DashboardInfo from "../components/dashboards/DashboardInfo";
 import CompareStates from "../components/dashboards/CompareStates";
 import IndicatorDetailPanel from "../components/dashboards/IndicatorDetailPanel";
+import RiskSignals from "../components/dashboards/RiskSignals";
 
 export default function Dashboards() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -53,6 +54,9 @@ export default function Dashboards() {
     state: searchParams.get("state") ?? "",
     district: searchParams.get("district") ?? "",
     year: searchParams.get("year") ?? "",
+    // Cross-domain insight links arrive with a domain filter already applied.
+    category: searchParams.get("category") ?? "",
+    search: searchParams.get("search") ?? "",
   }));
   const [selected, setSelected] = useState<DashboardIndicator | null>(null);
 
@@ -285,6 +289,24 @@ export default function Dashboards() {
               selection, so it stays usable even when the filters above match nothing.
             */}
             <CompareStates indicators={indicators} />
+
+            {/* Collapsible Risk Signals Section */}
+            <div className="border-t border-[#E1E5EA] pt-6">
+              <details className="group">
+                <summary className="flex items-center justify-between cursor-pointer list-none mb-4">
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-xl font-bold font-poppins text-[#1F2933]">
+                      Land Governance Risk Signals
+                    </h2>
+                    <span className="text-xs text-[#5A6472] bg-[#F5F7FA] px-2 py-1 rounded">
+                      Optional analysis
+                    </span>
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-[#5A6472] group-open:rotate-90 transition-transform" />
+                </summary>
+                <RiskSignals indicators={indicators} />
+              </details>
+            </div>
           </>
         )}
 

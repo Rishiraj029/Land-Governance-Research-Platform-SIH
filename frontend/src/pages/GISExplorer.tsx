@@ -395,8 +395,9 @@ export default function GISExplorer() {
   const [filters, setFilters] = useState<GISFilters>({
     state: searchParams.get("state") ?? "",
     district: searchParams.get("district") ?? "",
-    category: "",
-    theme: "",
+    // Cross-domain insight links arrive with a domain filter already applied.
+    category: searchParams.get("category") ?? "",
+    theme: searchParams.get("theme") ?? "",
     dataset: ""
   });
 
