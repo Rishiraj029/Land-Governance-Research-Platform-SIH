@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import Navbar from "../components/layout/Navbar";
 import Footer from "../components/layout/Footer";
+import EvidenceChain, { type EvidenceConfidence } from "../components/search/EvidenceChain";
 import { useAuth } from "../hooks/useAuth";
 import {
   addDocumentBookmark,
@@ -23,6 +24,10 @@ import {
   searchRepositoryDocuments,
 } from "../lib/supabaseRepository";
 import { askRepositoryAi, MAX_AI_CONTEXT_DOCUMENTS, type AiSupportingDocument } from "../lib/aiSearch";
+import { loadDashboardIndicators } from "../lib/supabaseDashboards";
+import { loadGisFeatures } from "../lib/supabaseGis";
+import type { DashboardIndicator } from "../types/dashboard";
+import type { GISFeature } from "../types/gis";
 import type { RepositoryDocument } from "../types/repository";
 
 interface SearchFilters {
@@ -64,6 +69,36 @@ const EMPTY_OPTIONS: SearchOptions = {
   accessTiers: [],
   years: [],
 };
+
+const EVIDENCE_METHOD = "Only numbered document references cited in the AI answer are shown, after matching them to the current search results. Dashboard and GIS records are included only when their stored geography matches a cited document and a state named in the question or answer; these remain contextual geographic associations, not AI-generated citations.";
+
+function normalisePlace(value: string | null | undefined): string {
+  return (value ?? "").trim().toLocaleLowerCase();
+}
+
+function mentionsPlace(text: string, place: string): boolean {
+  const normalisedText = normalisePlace(text).replace(/[^a-z0-9]+/g, " ").trim();
+  const normalisedPlace = normalisePlace(place).replace(/[^a-z0-9]+/g, " ").trim();
+  return Boolean(normalisedPlace) && ` ${normalisedText} `.includes(` ${normalisedPlace} `);
+}
+
+function sharesDocumentGeography(
+  state: string | null | undefined,
+  district: string | null | undefined,
+  document: RepositoryDocument,
+  insightText: string,
+): boolean {
+  if (!document.state || normalisePlace(state) !== normalisePlace(document.state)) return false;
+  if (!mentionsPlace(insightText, document.state)) return false;
+  return !document.district || normalisePlace(district) === normalisePlace(document.district);
+}
+
+function evidenceConfidence(documentCount: number, indicatorCount: number, gisCount: number): EvidenceConfidence {
+  const evidenceTypes = Number(documentCount > 0) + Number(indicatorCount > 0) + Number(gisCount > 0);
+  if (evidenceTypes === 3) return "High";
+  if (evidenceTypes === 2) return "Medium";
+  return "Low";
+}
 
 function filtersForSearch(filters: SearchFilters) {
   const yearFrom = filters.year ? `${filters.year}-01-01` : "";
@@ -130,6 +165,9 @@ export default function SearchResults() {
   const [answer, setAnswer] = useState("");
   const [disclaimer, setDisclaimer] = useState("");
   const [supportingDocuments, setSupportingDocuments] = useState<AiSupportingDocument[]>([]);
+  const [evidenceDocumentIds, setEvidenceDocumentIds] = useState<string[]>([]);
+  const [evidenceIndicators, setEvidenceIndicators] = useState<DashboardIndicator[]>([]);
+  const [evidenceGisFeatures, setEvidenceGisFeatures] = useState<GISFeature[]>([]);
   const [bookmarkMessage, setBookmarkMessage] = useState("");
   const savedIds = bookmarkState.userId === user?.id ? bookmarkState.ids : new Set<string>();
 
@@ -180,6 +218,9 @@ export default function SearchResults() {
     setAnswer("");
     setDisclaimer("");
     setSupportingDocuments([]);
+    setEvidenceDocumentIds([]);
+    setEvidenceIndicators([]);
+    setEvidenceGisFeatures([]);
     setAiError(null);
     if (!cleanQuery) {
       setDocuments([]);
@@ -213,9 +254,37 @@ export default function SearchResults() {
         query.trim(),
         documents.slice(0, MAX_AI_CONTEXT_DOCUMENTS).map((document) => document.id)
       );
+      const submittedIds = new Set(documents.slice(0, MAX_AI_CONTEXT_DOCUMENTS).map((document) => document.id));
+      const citationNumbers = [...new Set(
+        [...result.answer.matchAll(/\[(\d+)\]/g)].map((match) => Number(match[1])),
+      )].sort((left, right) => left - right);
+      const citedDocuments = citationNumbers
+        .map((citationNumber) => result.supportingDocuments[citationNumber - 1])
+        .filter((document): document is AiSupportingDocument => Boolean(document) && submittedIds.has(document.id));
+      const verifiedIds = [...new Set(citedDocuments.map((document) => document.id))];
+      const verifiedIdSet = new Set(verifiedIds);
+      const verifiedDocuments = documents.filter((document) => verifiedIdSet.has(document.id));
       setAnswer(result.answer);
       setDisclaimer(result.disclaimer);
-      setSupportingDocuments(result.supportingDocuments);
+      setSupportingDocuments(citedDocuments.filter((document) => verifiedIdSet.has(document.id)));
+      setEvidenceDocumentIds(verifiedIds);
+
+      if (verifiedDocuments.length > 0) {
+        const [dashboardResult, gisResult] = await Promise.all([
+          loadDashboardIndicators(),
+          loadGisFeatures(),
+        ]);
+        const indicators = dashboardResult.error ? [] : dashboardResult.indicators
+          .filter((indicator) => verifiedDocuments.some((document) =>
+            sharesDocumentGeography(indicator.state, indicator.district, document, `${query.trim()} ${result.answer}`)))
+          .slice(0, 3);
+        const features = gisResult.error ? [] : gisResult.features
+          .filter((feature) => verifiedDocuments.some((document) =>
+            sharesDocumentGeography(feature.state, feature.district, document, `${query.trim()} ${result.answer}`)))
+          .slice(0, 3);
+        setEvidenceIndicators(indicators);
+        setEvidenceGisFeatures(features);
+      }
     } catch (error) {
       setAiError(error instanceof Error ? error.message : "AI summary is currently unavailable.");
     } finally {
@@ -258,6 +327,9 @@ export default function SearchResults() {
     setAnswer("");
     setDisclaimer("");
     setSupportingDocuments([]);
+    setEvidenceDocumentIds([]);
+    setEvidenceIndicators([]);
+    setEvidenceGisFeatures([]);
     setAiError(null);
     if (!query.trim()) return;
     setSearching(true);
@@ -376,6 +448,27 @@ export default function SearchResults() {
                   </div>
                 )}
               </section>
+            )}
+
+            {documents.length > 0 && (
+              <EvidenceChain
+                insightText={answer || query}
+                insightLabel={answer ? "AI insight" : "Repository search"}
+                supportingDocumentIds={answer
+                  ? evidenceDocumentIds
+                  : documents.slice(0, MAX_AI_CONTEXT_DOCUMENTS).map((document) => document.id)}
+                documents={documents}
+                dashboardIndicatorRefs={answer ? evidenceIndicators : []}
+                gisFeatureRefs={answer ? evidenceGisFeatures : []}
+                sourceMethodologyText={answer
+                  ? EVIDENCE_METHOD
+                  : "Search matches shown here are existing repository records, not AI-generated citations. Generate an AI research summary to view its verified supporting records and matching geographic context."}
+                confidence={evidenceConfidence(
+                  answer ? evidenceDocumentIds.length : Math.min(documents.length, MAX_AI_CONTEXT_DOCUMENTS),
+                  answer ? evidenceIndicators.length : 0,
+                  answer ? evidenceGisFeatures.length : 0,
+                )}
+              />
             )}
 
             {bookmarkMessage && <p role="status" className="mb-3 text-sm text-[#475467]">{bookmarkMessage}</p>}

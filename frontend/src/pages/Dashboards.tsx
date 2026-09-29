@@ -7,7 +7,7 @@
  * state with Retry, or an explicit empty-dataset state.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ChevronRight,
@@ -43,10 +43,17 @@ import CompareStates from "../components/dashboards/CompareStates";
 import IndicatorDetailPanel from "../components/dashboards/IndicatorDetailPanel";
 
 export default function Dashboards() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedIndicatorId = searchParams.get("indicatorId");
   const [indicators, setIndicators] = useState<DashboardIndicator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<DashboardFilters>(EMPTY_DASHBOARD_FILTERS);
+  const [filters, setFilters] = useState<DashboardFilters>(() => ({
+    ...EMPTY_DASHBOARD_FILTERS,
+    state: searchParams.get("state") ?? "",
+    district: searchParams.get("district") ?? "",
+    year: searchParams.get("year") ?? "",
+  }));
   const [selected, setSelected] = useState<DashboardIndicator | null>(null);
 
   const load = useCallback(async () => {
@@ -67,6 +74,10 @@ export default function Dashboards() {
   const filteredRecords = useMemo(() => filterIndicators(indicators, filters), [indicators, filters]);
   const meta = useMemo(() => summariseDataset(indicators), [indicators]);
   const hasActiveFilters = hasActiveDashboardFilters(filters);
+  const linkedIndicator = linkedIndicatorId
+    ? indicators.find((indicator) => indicator.id === linkedIndicatorId) ?? null
+    : null;
+  const selectedIndicator = selected ?? linkedIndicator;
 
   /** Changing state invalidates any district from the previous state. */
   const handleFiltersChange = useCallback((next: DashboardFilters) => {
@@ -76,6 +87,15 @@ export default function Dashboards() {
   }, []);
 
   const handleResetFilters = useCallback(() => setFilters(EMPTY_DASHBOARD_FILTERS), []);
+
+  function closeIndicatorDetail() {
+    setSelected(null);
+    if (searchParams.has("indicatorId")) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete("indicatorId");
+      setSearchParams(nextParams, { replace: true });
+    }
+  }
 
   const categoryTabs = useMemo(
     () => [{ value: "", label: "All Categories" }, ...options.categories.map((c) => ({ value: c, label: c }))],
@@ -316,11 +336,11 @@ export default function Dashboards() {
         </div>
       </div>
 
-      {selected && (
+      {selectedIndicator && (
         <IndicatorDetailPanel
-          indicator={selected}
+          indicator={selectedIndicator}
           illustrative={meta.illustrative}
-          onClose={() => setSelected(null)}
+          onClose={closeIndicatorDetail}
         />
       )}
     </div>

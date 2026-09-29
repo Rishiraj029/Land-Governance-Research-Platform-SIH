@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from "react-leaflet";
 import { 
   Layers, 
@@ -363,6 +363,7 @@ function MapController({
 }
 
 export default function GISExplorer() {
+  const [searchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFeature, setSelectedFeature] = useState<GISFeature | null>(null);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
@@ -392,8 +393,8 @@ export default function GISExplorer() {
 
   // Filter state
   const [filters, setFilters] = useState<GISFilters>({
-    state: "",
-    district: "",
+    state: searchParams.get("state") ?? "",
+    district: searchParams.get("district") ?? "",
     category: "",
     theme: "",
     dataset: ""
